@@ -39,6 +39,18 @@ python para_cap_standard.py 1 1 - magnetic_stirrer_01 1 1 --dry-run
 
 `--dry-run` 跳过相机连接，在目标路径生成带文件名水印的灰色占位图，用于确认目录结构是否正确。
 
+## 预览 GUI
+
+实时预览三台相机画面并直接拍摄，无需反复启停 pipeline：
+
+```bash
+# 从项目根目录启动（两种方式等价）
+python -m preview_mode.preview_gui
+python preview_mode/preview_gui.py
+```
+
+打开后可在 GUI 中选择容器、异常类型、小类、拍摄点位、视角，然后通过按钮控制拍摄。画面实时显示，所见即所得。
+
 ## 配置切换
 
 `capture_base.py` 顶部 `from path_config_standard import *` 决定使用哪套命名规范。如需改用中文命名体系，将这一行替换为对应的配置模块即可（如 `path_config_chinese.py`，需自行创建，内容参照 `capture.py` 中的字典）。

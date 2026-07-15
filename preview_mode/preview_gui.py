@@ -410,6 +410,14 @@ class PreviewCaptureGUI:
 
         return cid, aid, sub, point, view, photo
 
+    def _confirm_overwrite(self, paths: dict[str, Path]) -> bool:
+        existing = [p for p in paths.values() if p.exists()]
+        if not existing:
+            return True
+        msg = "以下文件已存在:\n" + "\n".join(str(p) for p in existing)
+        msg += "\n\n是否覆盖？"
+        return messagebox.askyesno("文件已存在", msg)
+
     def _build_output_dir(self) -> Path:
         cid, aid, sub, point, view, _photo = self._parse_params()
         return build_shot_dir(cid, aid, sub, point, view)
@@ -570,6 +578,9 @@ class PreviewCaptureGUI:
             messagebox.showwarning("参数不完整", str(exc))
             return
 
+        if not self._confirm_overwrite(paths):
+            return
+
         shot_dir = paths[REALSENSE].parent
         self._log(f"拍照 → {shot_dir}")
         self._capturing = True
@@ -618,6 +629,9 @@ class PreviewCaptureGUI:
             paths = self._build_output_paths()
         except ValueError as exc:
             messagebox.showwarning("参数不完整", str(exc))
+            return
+
+        if not self._confirm_overwrite(paths):
             return
 
         self._log(f"dry-run → {paths[REALSENSE].parent}")
