@@ -72,6 +72,52 @@ SHOOTING_POINTS = [
     "tianping", "zhuanyi",
 ]
 
+SHOOTING_POINTS_CN = {
+    "磁力搅拌器1": "magnetic_stirrer_01",
+    "磁力搅拌器2": "magnetic_stirrer_02",
+    "烧杯样品盘": "beaker_sample_carousel",
+    "孔板/储液槽样品盘": "plate_reservoir_sample_carousel",
+    "混合样品盘": "mixed_sample_carousel",
+    "分析天平": "analytical_balance",
+    "转移台": "transfer_stage",
+    "超声波清洗机槽1": "ultrasonic_cleaner_slot_01",
+    "超声波清洗机槽2": "ultrasonic_cleaner_slot_02",
+    "超声波清洗机槽3": "ultrasonic_cleaner_slot_03",
+    "移液站": "pipetting_station",
+    "搅拌器1": "mixer1",
+    "搅拌器2": "mixer2",
+    "堆栈1": "stack1",
+    "堆栈3": "stack3",
+    "天平": "tianping",
+    "转移": "zhuanyi",
+}
+
+SHOOTING_POINTS_CN_LIST = list(SHOOTING_POINTS_CN.keys())
+
+CONTAINERS_CN: dict[int, str] = {
+    1: "烧杯", 2: "试管模型1", 3: "试管模型2",
+    4: "6孔板", 5: "11孔板", 6: "24孔板",
+    7: "48孔板", 8: "96孔板模型1",
+    9: "96孔板模型2", 10: "磁力搅拌器1",
+    11: "磁力搅拌器2", 12: "储液槽", 13: "超声波清洗机",
+}
+
+ANOMALY_TYPES_CN: dict[int, str] = {
+    1: "正常", 2: "污渍", 3: "破损", 4: "液体残留",
+    5: "固体残留", 6: "盖子异常", 7: "标签异常", 8: "摆放错误",
+}
+
+ANOMALY_SUBCATEGORIES_CN: dict[str, str] = {
+    "water_stain": "水渍", "pigment_stain": "颜料污渍",
+    "scratch": "划痕", "crack": "裂痕",
+    "colorless_liquid": "无色液体", "colored_clear_liquid": "带颜色透明液体",
+    "turbid_liquid": "浑浊液体", "wall_liquid_residue": "杯壁液体",
+    "powder": "粉末", "crystalline_residue": "结晶残留",
+    "cracked_lid": "盖子裂痕", "incorrect_lid": "盖子盖错", "missing_lid": "没有盖子",
+    "label_soiling": "标签脏污", "label_detachment": "标签脱落", "label_damage": "标签破损",
+    "tilted_placement": "斜放",
+}
+
 
 # ────────────────────────────────────────────────────────────────────────────
 # PreviewCaptureGUI
@@ -175,7 +221,7 @@ class PreviewCaptureGUI:
             row0, textvariable=self._container_var, state="readonly", width=30
         )
         self._container_cb.pack(side=tk.LEFT, padx=(0, 16))
-        self._container_var.trace_add("write", self._update_path_preview)
+        self._container_var.trace_add("write", self._on_path_field_change)
 
         ttk.Label(row0, text="异常类型:", width=10).pack(side=tk.LEFT)
         self._anomaly_var = tk.StringVar()
@@ -194,15 +240,15 @@ class PreviewCaptureGUI:
             row1, textvariable=self._sub_var, state="readonly", width=30
         )
         self._sub_cb.pack(side=tk.LEFT, padx=(0, 16))
-        self._sub_var.trace_add("write", self._update_path_preview)
+        self._sub_var.trace_add("write", self._on_path_field_change)
 
         ttk.Label(row1, text="拍摄点位:", width=10).pack(side=tk.LEFT)
-        self._point_var = tk.StringVar(value=SHOOTING_POINTS[0])
+        self._point_var = tk.StringVar(value=SHOOTING_POINTS_CN_LIST[0])
         self._point_cb = ttk.Combobox(
-            row1, textvariable=self._point_var, values=SHOOTING_POINTS, width=28
+            row1, textvariable=self._point_var, values=SHOOTING_POINTS_CN_LIST, width=28
         )
         self._point_cb.pack(side=tk.LEFT)
-        self._point_var.trace_add("write", self._update_path_preview)
+        self._point_var.trace_add("write", self._on_path_field_change)
 
         # Row 2: view number + photo number
         row2 = ttk.Frame(section)
@@ -212,7 +258,7 @@ class PreviewCaptureGUI:
         ttk.Spinbox(
             row2, from_=1, to=999, textvariable=self._view_var, width=8
         ).pack(side=tk.LEFT)
-        self._view_var.trace_add("write", self._update_path_preview)
+        self._view_var.trace_add("write", self._on_path_field_change)
 
         ttk.Label(row2, text="照片编号:", width=10).pack(
             side=tk.LEFT, padx=(28, 0)
@@ -239,12 +285,12 @@ class PreviewCaptureGUI:
 
     def _populate_params(self) -> None:
         """Fill comboboxes with values from path_config_standard."""
-        c_items = [f"{k}: {v}" for k, v in sorted(CONTAINERS.items())]
+        c_items = [f"{k}: {v}" for k, v in sorted(CONTAINERS_CN.items())]
         self._container_cb["values"] = c_items
         if c_items:
             self._container_var.set(c_items[0])
 
-        a_items = [f"{k}: {v}" for k, v in sorted(ANOMALY_TYPES.items())]
+        a_items = [f"{k}: {v}" for k, v in sorted(ANOMALY_TYPES_CN.items())]
         self._anomaly_cb["values"] = a_items
         if a_items:
             self._anomaly_var.set(a_items[0])
@@ -298,8 +344,24 @@ class PreviewCaptureGUI:
     # ── parameter callbacks ───────────────────────────────────────────
 
     def _on_anomaly_change(self, *_args) -> None:
+        self._photo_var.set(1)
         self._update_subcategories()
         self._update_path_preview()
+
+    def _on_path_field_change(self, *_args) -> None:
+        self._photo_var.set(1)
+        self._update_path_preview()
+
+    def _get_shooting_point(self) -> str:
+        cn = self._point_var.get().strip()
+        return SHOOTING_POINTS_CN.get(cn, cn)
+
+    def _get_subcategory_value(self) -> str:
+        sub = self._sub_var.get().strip()
+        if sub == NO_SUBCATEGORY:
+            return NO_SUBCATEGORY
+        subs_en = {v: k for k, v in ANOMALY_SUBCATEGORIES_CN.items()}
+        return subs_en.get(sub, sub)
 
     def _update_subcategories(self) -> None:
         text = self._anomaly_var.get()
@@ -311,14 +373,15 @@ class PreviewCaptureGUI:
             aid = 1
 
         subs = ANOMALY_SUBCATEGORIES.get(aid, [])
+        subs_display = [ANOMALY_SUBCATEGORIES_CN.get(s, s) for s in subs]
         if aid == 1 or not subs:
             self._sub_cb["state"] = tk.DISABLED
             self._sub_var.set(NO_SUBCATEGORY)
             self._sub_cb["values"] = [NO_SUBCATEGORY]
         else:
             self._sub_cb["state"] = "readonly"
-            self._sub_cb["values"] = subs
-            self._sub_var.set(subs[0])
+            self._sub_cb["values"] = subs_display
+            self._sub_var.set(subs_display[0])
 
     def _update_path_preview(self, *_args) -> None:
         try:
@@ -337,8 +400,8 @@ class PreviewCaptureGUI:
         from GUI state.  Raises ``ValueError`` on bad input."""
         cid = int(self._container_var.get().split(":")[0])
         aid = int(self._anomaly_var.get().split(":")[0])
-        sub = self._sub_var.get().strip()
-        point = self._point_var.get().strip()
+        sub = self._get_subcategory_value()
+        point = self._get_shooting_point()
         view = self._view_var.get()
         photo = self._photo_var.get()
 
