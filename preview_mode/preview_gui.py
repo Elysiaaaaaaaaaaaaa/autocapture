@@ -14,7 +14,7 @@ import sys
 import threading
 import tkinter as tk
 from pathlib import Path
-from tkinter import ttk, messagebox
+from tkinter import ttk, scrolledtext, messagebox
 
 # Allow importing modules from the project root
 _PARENT = Path(__file__).resolve().parent.parent
@@ -286,7 +286,7 @@ class PreviewCaptureGUI:
 
     def _build_log_section(self, parent: ttk.Frame) -> None:
         ttk.Label(parent, text="日志:").pack(anchor=tk.W, pady=(4, 0))
-        self._log_area = tk.scrolledtext.ScrolledText(  # type: ignore[attr-defined]
+        self._log_area = scrolledtext.ScrolledText(
             parent,
             height=8,
             font=("Consolas", 9),
