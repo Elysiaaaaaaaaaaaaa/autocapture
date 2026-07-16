@@ -251,13 +251,12 @@ class PreviewCaptureGUI:
         self._point_var.trace_add("write", self._on_path_field_change)
 
         # Row 2: view number + photo number
+        # 视角编号支持数字（补零）或字符串如 A1（不补零）
         row2 = ttk.Frame(section)
         row2.pack(fill=tk.X, pady=1)
         ttk.Label(row2, text="视角编号:", width=10).pack(side=tk.LEFT)
-        self._view_var = tk.IntVar(value=1)
-        ttk.Spinbox(
-            row2, from_=1, to=999, textvariable=self._view_var, width=8
-        ).pack(side=tk.LEFT)
+        self._view_var = tk.StringVar(value="1")
+        ttk.Entry(row2, textvariable=self._view_var, width=10).pack(side=tk.LEFT)
         self._view_var.trace_add("write", self._on_path_field_change)
 
         ttk.Label(row2, text="照片编号:", width=10).pack(
@@ -395,18 +394,23 @@ class PreviewCaptureGUI:
 
     # ── path building ─────────────────────────────────────────────────
 
-    def _parse_params(self) -> tuple[int, int, str, str, int, int]:
+    def _parse_params(self) -> tuple[int, int, str, str, str, int]:
         """Extract (container_id, anomaly_id, sub, point, view, photo)
-        from GUI state.  Raises ``ValueError`` on bad input."""
+        from GUI state.  Raises ``ValueError`` on bad input.
+
+        view 可为纯数字（路径中补零）或字符串如 A1（路径中原样使用）。
+        """
         cid = int(self._container_var.get().split(":")[0])
         aid = int(self._anomaly_var.get().split(":")[0])
         sub = self._get_subcategory_value()
         point = self._get_shooting_point()
-        view = self._view_var.get()
+        view = self._view_var.get().strip()
         photo = self._photo_var.get()
 
         if not point:
             raise ValueError("请选择拍摄点位")
+        if not view:
+            raise ValueError("请填写视角编号")
 
         return cid, aid, sub, point, view, photo
 
