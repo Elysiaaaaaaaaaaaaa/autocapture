@@ -7,7 +7,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from path_config_beaker import *
+from path_config_standard import *
 
 
 def _create_dry_run_placeholder(output_file: Path) -> None:

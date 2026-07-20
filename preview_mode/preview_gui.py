@@ -10,6 +10,7 @@ Usage::
 
 from __future__ import annotations
 
+import re
 import sys
 import threading
 import tkinter as tk
@@ -266,6 +267,9 @@ class PreviewCaptureGUI:
         ttk.Spinbox(
             row2, from_=1, to=999, textvariable=self._photo_var, width=8
         ).pack(side=tk.LEFT)
+        ttk.Button(
+            row2, text="Next", width=6, command=self._next_photo_number
+        ).pack(side=tk.LEFT, padx=(6, 0))
 
         # Path preview
         row3 = ttk.Frame(section)
@@ -440,6 +444,52 @@ class PreviewCaptureGUI:
             ORBBEC_C1: orbbec_dir / "camera1_Color.png",
             ORBBEC_C2: orbbec_dir / "camera2_Color.png",
         }
+
+    def _scan_max_photo_number(self, shot_dir: Path) -> int:
+        """Return the highest photo number already present in *shot_dir*.
+
+        Recognises script naming rules:
+        - RealSense: ``001_Color.png``, ``002_Color.png``, …
+        - Orbbec:    ``view_top_1/``, ``view_top_2/``, …
+        """
+        if not shot_dir.is_dir():
+            return 0
+
+        max_n = 0
+        color_re = re.compile(r"^(\d+)_Color\.png$", re.IGNORECASE)
+        top_re = re.compile(r"^view_top_(\d+)$", re.IGNORECASE)
+
+        for entry in shot_dir.iterdir():
+            if entry.is_file():
+                m = color_re.match(entry.name)
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+            elif entry.is_dir():
+                m = top_re.match(entry.name)
+                if m:
+                    max_n = max(max_n, int(m.group(1)))
+
+        return max_n
+
+    def _next_photo_number(self) -> None:
+        """Set photo number to max existing + 1 in the current shot folder."""
+        try:
+            shot_dir = self._build_output_dir()
+        except ValueError as exc:
+            messagebox.showwarning("参数不完整", str(exc))
+            return
+        except Exception:
+            messagebox.showwarning("参数不完整", "无法解析当前保存路径")
+            return
+
+        next_n = self._scan_max_photo_number(shot_dir) + 1
+        if next_n > 999:
+            messagebox.showwarning("编号超限", "下一编号已超过 999")
+            return
+
+        self._photo_var.set(next_n)
+        self._update_path_preview()
+        self._log(f"Next → 照片编号 {next_n}  ({shot_dir})")
 
     # ── preview control ───────────────────────────────────────────────
 
