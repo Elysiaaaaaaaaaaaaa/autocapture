@@ -116,6 +116,16 @@ def format_shooting_points() -> str:
     return "\n".join(lines)
 
 
+def format_view_suffix(view_number: int | str) -> str:
+    """纯数字视角编号补零到 3 位（如 1 -> 001）；字符串原样使用（如 A1）。"""
+    text = str(view_number).strip()
+    if not text:
+        raise ValueError("视角编号不能为空")
+    if text.isdigit():
+        return f"{int(text):03d}"
+    return text
+
+
 def resolve_view_name(view_number: int) -> str:
     known = ", ".join(f"{k}->{v}" for k, v in VIEW_NAMES.items())
     if view_number not in VIEW_NAMES:
@@ -136,11 +146,11 @@ def build_shot_dir(
     anomaly_type: int,
     sub_anomaly: str,
     shooting_point: str,
-    view_number: int,
+    view_number: int | str,
 ) -> Path:
     container = resolve_container(container_id)
     anomaly_folder = ANOMALY_TYPES[anomaly_type]
-    view_suffix = f"{view_number:03d}"
+    view_suffix = format_view_suffix(view_number)
     point_name = shooting_point.strip("/")
     sub_name = sub_anomaly.strip()
 
