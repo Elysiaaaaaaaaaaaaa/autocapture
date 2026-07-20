@@ -1,13 +1,28 @@
 #!/usr/bin/env python3
 import argparse
 import concurrent.futures
+import importlib
 import sys
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from path_config_standard import *
+
+def _load_config(module_name: str):
+    """Dynamically import a path_config module by name.
+
+    Examples::
+
+        cfg = _load_config("path_config_standard")
+        cfg = _load_config("path_config_beaker")
+        cfg = _load_config("path_config_cleaner")
+    """
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as e:
+        print(f"无法加载配置模块 '{module_name}': {e}", file=sys.stderr)
+        raise SystemExit(1) from e
 
 
 def _create_dry_run_placeholder(output_file: Path) -> None:
@@ -75,7 +90,7 @@ def frame_to_bgr_image(frame) -> np.ndarray | None:
     return cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR)
 
 
-def list_cameras() -> None:
+def list_cameras(orbbec_c1_serial: str) -> None:
     import pyrealsense2 as rs
     from pyorbbecsdk import Context
 
@@ -91,11 +106,11 @@ def list_cameras() -> None:
     for index in range(ob_list.get_count()):
         serial = ob_list.get_device_serial_number_by_index(index)
         name = ob_list.get_device_name_by_index(index)
-        role = "c1" if serial == ORBBEC_C1_SERIAL else "c2"
+        role = "c1" if serial == orbbec_c1_serial else "c2"
         print(f"  - {name}  SN={serial}  -> {role}")
 
 
-def capture_realsense_color(output_file: Path) -> None:
+def capture_realsense_color(output_file: Path, warmup_frames: int) -> None:
     import pyrealsense2 as rs
 
     pipeline = rs.pipeline()
@@ -108,7 +123,7 @@ def capture_realsense_color(output_file: Path) -> None:
         raise RuntimeError(f"RealSense 启动失败: {exc}") from exc
 
     try:
-        for _ in range(WARMUP_FRAMES):
+        for _ in range(warmup_frames):
             pipeline.wait_for_frames()
 
         frames = pipeline.wait_for_frames()
@@ -136,7 +151,7 @@ def capture_realsense_color(output_file: Path) -> None:
         pipeline.stop()
 
 
-def capture_orbbec_single(serial: str, output_file: Path) -> None:
+def capture_orbbec_single(serial: str, output_file: Path, warmup_frames: int) -> None:
     from pyorbbecsdk import (
         Config,
         Context,
@@ -172,7 +187,7 @@ def capture_orbbec_single(serial: str, output_file: Path) -> None:
         raise RuntimeError(f"Orbbec {serial} 启动失败: {exc}") from exc
 
     try:
-        for _ in range(WARMUP_FRAMES):
+        for _ in range(warmup_frames):
             pipeline.wait_for_frames(1000)
 
         for _ in range(30):
@@ -195,14 +210,14 @@ def capture_orbbec_single(serial: str, output_file: Path) -> None:
         pipeline.stop()
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args(cfg) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="采集 1 台 RealSense + 2 台 Orbbec 彩色图并保存到数据集目录（并行采集）",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=f"""
-{format_containers()}
+{cfg.format_containers()}
 
-{format_anomaly_types()}
+{cfg.format_anomaly_types()}
 
 示例:
   # beaker/normal/magnetic_stirrer_01-001/ 下第 1 张
@@ -218,38 +233,44 @@ def parse_args() -> argparse.Namespace:
   python capture.py 1 3 crack magnetic_stirrer_01 1 1
 
 参数说明:
-  1. 容器编号     1-13，见上方列表
-  2. 异常类型     1-8，见上方列表
-  3. 小类         第三层文件夹名；正常类填 {NO_SUBCATEGORY}
+  1. 容器编号     {min_c}-{max_c}，见上方列表
+  2. 异常类型     {min_a}-{max_a}，见上方列表
+  3. 小类         第三层文件夹名；正常类填 {cfg.NO_SUBCATEGORY}
   4. 拍摄点位     如 magnetic_stirrer_01 / beaker_sample_carousel
   5. 视角编号     决定文件夹名，如 1 -> magnetic_stirrer_01-001，2 -> magnetic_stirrer_01-002
   6. 照片编号     文件夹内的第几张，如 1 -> 001_Color.png 和 top1/
 
 保存规则:
-  - 目录: {{拍摄点位}}-{{视角编号:03d}}/，如 magnetic_stirrer_01-001
-  - RealSense: {{目录}}/{{照片编号:03d}}_Color.png
-  - Orbbec:    {{目录}}/top{{照片编号}}/c1_Color.png, c2_Color.png
+  - 目录: {{{{拍摄点位}}}}-{{{{视角编号:03d}}}}/，如 magnetic_stirrer_01-001
+  - RealSense: {{{{目录}}}}/{{{{照片编号:03d}}}}_Color.png
+  - Orbbec:    {{{{目录}}}}/top{{{{照片编号}}}}/c1_Color.png, c2_Color.png
     CL8K14100H4 -> c1，另一台 Orbbec -> c2
-""",
+""".format(min_c=min(cfg.CONTAINERS), max_c=max(cfg.CONTAINERS),
+           min_a=min(cfg.ANOMALY_TYPES), max_a=max(cfg.ANOMALY_TYPES)),
+    )
+    parser.add_argument(
+        "--config",
+        default="path_config_standard",
+        help="路径配置模块名，默认 %(default)s（可选 path_config_beaker / path_config_cleaner）",
     )
     parser.add_argument(
         "container",
         nargs="?",
         type=int,
-        choices=sorted(CONTAINERS),
-        help="容器编号 (1-13)",
+        choices=sorted(cfg.CONTAINERS),
+        help=f"容器编号 ({min(cfg.CONTAINERS)}-{max(cfg.CONTAINERS)})",
     )
     parser.add_argument(
         "anomaly_type",
         nargs="?",
         type=int,
-        choices=sorted(ANOMALY_TYPES),
-        help="异常类型编号 (1-8)",
+        choices=sorted(cfg.ANOMALY_TYPES),
+        help=f"异常类型编号 ({min(cfg.ANOMALY_TYPES)}-{max(cfg.ANOMALY_TYPES)})",
     )
     parser.add_argument(
         "sub_anomaly",
         nargs="?",
-        help=f"小类文件夹名；正常类填 {NO_SUBCATEGORY}，如 crack / water_stain / crystalline_residue",
+        help=f"小类文件夹名；正常类填 {cfg.NO_SUBCATEGORY}，如 crack / water_stain / crystalline_residue",
     )
     parser.add_argument(
         "shooting_point",
@@ -286,17 +307,34 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def main() -> int:
-    args = parse_args()
+def main(config_module: str | None = None) -> int:
+    # Pre-parse for --config so we can load the right module before
+    # building the full argument parser (whose choices depend on config).
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config", default="path_config_standard")
+    pre_args, remaining = pre_parser.parse_known_args()
+
+    # CLI override takes precedence over programmatic argument
+    if config_module is None:
+        config_module = pre_args.config
+
+    cfg = _load_config(config_module)
+    print(f"[配置] 使用 {config_module}")
+
+    # Inject --config into remaining so the full parser sees it
+    if "--config" not in remaining:
+        remaining = ["--config", config_module] + list(remaining)
+
+    args = parse_args(cfg)
 
     if args.list_cameras:
-        list_cameras()
+        list_cameras(cfg.ORBBEC_C1_SERIAL)
         return 0
 
     if args.list_types:
-        print(format_containers())
+        print(cfg.format_containers())
         print()
-        print(format_anomaly_types())
+        print(cfg.format_anomaly_types())
         return 0
 
     missing = [
@@ -325,7 +363,7 @@ def main() -> int:
         return 1
 
     try:
-        shot_dir = build_shot_dir(
+        shot_dir = cfg.build_shot_dir(
             args.container,
             args.anomaly_type,
             args.sub_anomaly,
@@ -360,18 +398,18 @@ def main() -> int:
         return 1
 
     serials = [device_list.get_device_serial_number_by_index(i) for i in range(count)]
-    if ORBBEC_C1_SERIAL not in serials:
-        print(f"未找到 c1 相机 (SN={ORBBEC_C1_SERIAL})", file=sys.stderr)
+    if cfg.ORBBEC_C1_SERIAL not in serials:
+        print(f"未找到 c1 相机 (SN={cfg.ORBBEC_C1_SERIAL})", file=sys.stderr)
         return 1
 
-    c1_serial = ORBBEC_C1_SERIAL
+    c1_serial = cfg.ORBBEC_C1_SERIAL
     c2_serial = [s for s in serials if s != c1_serial][0]
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
         futures = [
-            executor.submit(capture_realsense_color, realsense_file),
-            executor.submit(capture_orbbec_single, c1_serial, orbbec_c1_file),
-            executor.submit(capture_orbbec_single, c2_serial, orbbec_c2_file),
+            executor.submit(capture_realsense_color, realsense_file, cfg.WARMUP_FRAMES),
+            executor.submit(capture_orbbec_single, c1_serial, orbbec_c1_file, cfg.WARMUP_FRAMES),
+            executor.submit(capture_orbbec_single, c2_serial, orbbec_c2_file, cfg.WARMUP_FRAMES),
         ]
         for future in concurrent.futures.as_completed(futures):
             try:

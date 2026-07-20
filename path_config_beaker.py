@@ -32,6 +32,26 @@ CONTAINERS: dict[int, str] = {
     1: "beaker",
 }
 
+CONTAINERS_CN: dict[int, str] = {
+    1: "烧杯",
+}
+
+ANOMALY_TYPES_CN: dict[int, str] = {
+    1: "正常", 2: "污渍", 3: "破损", 4: "液体残留",
+    5: "固体残留", 6: "盖子异常", 7: "标签异常", 8: "摆放错误",
+}
+
+ANOMALY_SUBCATEGORIES_CN: dict[str, str] = {
+    "water_stain": "水渍", "pigment_stain": "颜料污渍",
+    "scratch": "划痕", "crack": "裂痕",
+    "colorless_liquid": "无色液体", "colored_clear_liquid": "带颜色透明液体",
+    "turbid_liquid": "浑浊液体", "wall_liquid_residue": "杯壁液体",
+    "powder": "粉末", "crystalline_residue": "结晶残留",
+    "cracked_lid": "盖子裂痕", "incorrect_lid": "盖子盖错", "missing_lid": "没有盖子",
+    "label_soiling": "标签脏污", "label_detachment": "标签脱落", "label_damage": "标签破损",
+    "tilted_placement": "斜放",
+}
+
 SHOOTING_POINTS: dict[str, str] = {
     "beaker_sample_carousel":        "stack1 纯烧杯样品转盘",
     "mixed_sample_carousel":         "stack3 混合样品转盘",
@@ -40,6 +60,10 @@ SHOOTING_POINTS: dict[str, str] = {
     "analytical_balance":            "tianping 分析天平",
     "transfer_stage":                "zhuanyi 转移台",
 }
+
+# 反向映射：中文 → 英文（供 GUI 下拉框使用）
+SHOOTING_POINTS_CN: dict[str, str] = {v: k for k, v in SHOOTING_POINTS.items()}
+SHOOTING_POINTS_CN_LIST: list[str] = list(SHOOTING_POINTS_CN.keys())
 
 VIEW_NAMES: dict[int, str] = {
     1: "view_top_01",

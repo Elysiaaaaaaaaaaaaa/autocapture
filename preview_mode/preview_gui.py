@@ -10,6 +10,8 @@ Usage::
 
 from __future__ import annotations
 
+import argparse
+import importlib
 import re
 import sys
 import threading
@@ -25,15 +27,6 @@ if str(_PARENT) not in sys.path:
 import cv2
 import numpy as np
 
-from path_config_standard import (
-    ANOMALY_SUBCATEGORIES,
-    ANOMALY_TYPES,
-    CONTAINERS,
-    DATASET_ROOT,
-    NO_SUBCATEGORY,
-    ORBBEC_C1_SERIAL,
-    build_shot_dir,
-)
 from capture_base import _create_dry_run_placeholder
 from preview_mode.camera_manager import (
     CAMERA_IDS,
@@ -51,6 +44,16 @@ try:
 except ImportError:
     HAS_PIL = False
 
+
+def _load_path_config(module_name: str):
+    """Dynamically import a path_config module by name."""
+    try:
+        return importlib.import_module(module_name)
+    except ImportError as e:
+        print(f"无法加载配置模块 '{module_name}': {e}", file=sys.stderr)
+        raise SystemExit(1) from e
+
+
 # ── constants ─────────────────────────────────────────────────────────────
 
 PREVIEW_WIDTH = 640
@@ -63,62 +66,6 @@ CAMERA_LABELS: dict[str, str] = {
     ORBBEC_C2: "Orbbec C2",
 }
 
-SHOOTING_POINTS = [
-    "magnetic_stirrer_01", "magnetic_stirrer_02",
-    "beaker_sample_carousel", "plate_reservoir_sample_carousel",
-    "mixed_sample_carousel", "analytical_balance", "transfer_stage",
-    "ultrasonic_cleaner_slot_01", "ultrasonic_cleaner_slot_02",
-    "ultrasonic_cleaner_slot_03", "pipetting_station",
-    "mixer1", "mixer2", "stack1", "stack3",
-    "tianping", "zhuanyi",
-]
-
-SHOOTING_POINTS_CN = {
-    "磁力搅拌器1": "magnetic_stirrer_01",
-    "磁力搅拌器2": "magnetic_stirrer_02",
-    "烧杯样品盘": "beaker_sample_carousel",
-    "孔板/储液槽样品盘": "plate_reservoir_sample_carousel",
-    "混合样品盘": "mixed_sample_carousel",
-    "分析天平": "analytical_balance",
-    "转移台": "transfer_stage",
-    "超声波清洗机槽1": "ultrasonic_cleaner_slot_01",
-    "超声波清洗机槽2": "ultrasonic_cleaner_slot_02",
-    "超声波清洗机槽3": "ultrasonic_cleaner_slot_03",
-    "移液站": "pipetting_station",
-    "搅拌器1": "mixer1",
-    "搅拌器2": "mixer2",
-    "堆栈1": "stack1",
-    "堆栈3": "stack3",
-    "天平": "tianping",
-    "转移": "zhuanyi",
-}
-
-SHOOTING_POINTS_CN_LIST = list(SHOOTING_POINTS_CN.keys())
-
-CONTAINERS_CN: dict[int, str] = {
-    1: "烧杯", 2: "试管模型1", 3: "试管模型2",
-    4: "6孔板", 5: "11孔板", 6: "24孔板",
-    7: "48孔板", 8: "96孔板模型1",
-    9: "96孔板模型2", 10: "磁力搅拌器1",
-    11: "磁力搅拌器2", 12: "储液槽", 13: "超声波清洗机",
-}
-
-ANOMALY_TYPES_CN: dict[int, str] = {
-    1: "正常", 2: "污渍", 3: "破损", 4: "液体残留",
-    5: "固体残留", 6: "盖子异常", 7: "标签异常", 8: "摆放错误",
-}
-
-ANOMALY_SUBCATEGORIES_CN: dict[str, str] = {
-    "water_stain": "水渍", "pigment_stain": "颜料污渍",
-    "scratch": "划痕", "crack": "裂痕",
-    "colorless_liquid": "无色液体", "colored_clear_liquid": "带颜色透明液体",
-    "turbid_liquid": "浑浊液体", "wall_liquid_residue": "杯壁液体",
-    "powder": "粉末", "crystalline_residue": "结晶残留",
-    "cracked_lid": "盖子裂痕", "incorrect_lid": "盖子盖错", "missing_lid": "没有盖子",
-    "label_soiling": "标签脏污", "label_detachment": "标签脱落", "label_damage": "标签破损",
-    "tilted_placement": "斜放",
-}
-
 
 # ────────────────────────────────────────────────────────────────────────────
 # PreviewCaptureGUI
@@ -129,8 +76,14 @@ class PreviewCaptureGUI:
     """Standalone tkinter application that combines live camera preview
     with parameter-driven capture directly from the video stream."""
 
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(self, root: tk.Tk, cfg=None) -> None:
         self.root = root
+
+        # Load path config (pluggable)
+        if cfg is None:
+            cfg = _load_path_config("path_config_standard")
+        self._cfg = cfg
+
         root.title("拍照控制 — 实时预览")
         root.minsize(1000, 800)
 
@@ -244,9 +197,9 @@ class PreviewCaptureGUI:
         self._sub_var.trace_add("write", self._on_path_field_change)
 
         ttk.Label(row1, text="拍摄点位:", width=10).pack(side=tk.LEFT)
-        self._point_var = tk.StringVar(value=SHOOTING_POINTS_CN_LIST[0])
+        self._point_var = tk.StringVar(value=self._cfg.SHOOTING_POINTS_CN_LIST[0])
         self._point_cb = ttk.Combobox(
-            row1, textvariable=self._point_var, values=SHOOTING_POINTS_CN_LIST, width=28
+            row1, textvariable=self._point_var, values=self._cfg.SHOOTING_POINTS_CN_LIST, width=28
         )
         self._point_cb.pack(side=tk.LEFT)
         self._point_var.trace_add("write", self._on_path_field_change)
@@ -287,13 +240,13 @@ class PreviewCaptureGUI:
         self._populate_params()
 
     def _populate_params(self) -> None:
-        """Fill comboboxes with values from path_config_standard."""
-        c_items = [f"{k}: {v}" for k, v in sorted(CONTAINERS_CN.items())]
+        """Fill comboboxes with values from the loaded path config."""
+        c_items = [f"{k}: {v}" for k, v in sorted(self._cfg.CONTAINERS_CN.items())]
         self._container_cb["values"] = c_items
         if c_items:
             self._container_var.set(c_items[0])
 
-        a_items = [f"{k}: {v}" for k, v in sorted(ANOMALY_TYPES_CN.items())]
+        a_items = [f"{k}: {v}" for k, v in sorted(self._cfg.ANOMALY_TYPES_CN.items())]
         self._anomaly_cb["values"] = a_items
         if a_items:
             self._anomaly_var.set(a_items[0])
@@ -357,13 +310,13 @@ class PreviewCaptureGUI:
 
     def _get_shooting_point(self) -> str:
         cn = self._point_var.get().strip()
-        return SHOOTING_POINTS_CN.get(cn, cn)
+        return self._cfg.SHOOTING_POINTS_CN.get(cn, cn)
 
     def _get_subcategory_value(self) -> str:
         sub = self._sub_var.get().strip()
-        if sub == NO_SUBCATEGORY:
-            return NO_SUBCATEGORY
-        subs_en = {v: k for k, v in ANOMALY_SUBCATEGORIES_CN.items()}
+        if sub == self._cfg.NO_SUBCATEGORY:
+            return self._cfg.NO_SUBCATEGORY
+        subs_en = {v: k for k, v in self._cfg.ANOMALY_SUBCATEGORIES_CN.items()}
         return subs_en.get(sub, sub)
 
     def _update_subcategories(self) -> None:
@@ -375,12 +328,12 @@ class PreviewCaptureGUI:
         except (ValueError, IndexError):
             aid = 1
 
-        subs = ANOMALY_SUBCATEGORIES.get(aid, [])
-        subs_display = [ANOMALY_SUBCATEGORIES_CN.get(s, s) for s in subs]
+        subs = self._cfg.ANOMALY_SUBCATEGORIES.get(aid, [])
+        subs_display = [self._cfg.ANOMALY_SUBCATEGORIES_CN.get(s, s) for s in subs]
         if aid == 1 or not subs:
             self._sub_cb["state"] = tk.DISABLED
-            self._sub_var.set(NO_SUBCATEGORY)
-            self._sub_cb["values"] = [NO_SUBCATEGORY]
+            self._sub_var.set(self._cfg.NO_SUBCATEGORY)
+            self._sub_cb["values"] = [self._cfg.NO_SUBCATEGORY]
         else:
             self._sub_cb["state"] = "readonly"
             self._sub_cb["values"] = subs_display
@@ -428,13 +381,13 @@ class PreviewCaptureGUI:
 
     def _build_output_dir(self) -> Path:
         cid, aid, sub, point, view, _photo = self._parse_params()
-        return build_shot_dir(cid, aid, sub, point, view)
+        return self._cfg.build_shot_dir(cid, aid, sub, point, view)
 
     def _build_output_paths(self) -> dict[str, Path]:
         """Return ``{camera_id: output_file_path}`` for the current
         parameter selection."""
         cid, aid, sub, point, view, photo = self._parse_params()
-        shot_dir = build_shot_dir(cid, aid, sub, point, view)
+        shot_dir = self._cfg.build_shot_dir(cid, aid, sub, point, view)
 
         photo_id = f"{photo:03d}"
         orbbec_dir = shot_dir / f"view_top_{photo}"
@@ -508,7 +461,7 @@ class PreviewCaptureGUI:
         self._set_buttons_preview_starting()
 
         try:
-            self._camera_manager = CameraManager()
+            self._camera_manager = CameraManager(warmup_frames=self._cfg.WARMUP_FRAMES)
         except Exception as exc:
             self._log(f"初始化 CameraManager 失败: {exc}")
             messagebox.showerror("相机初始化失败", str(exc))
@@ -518,7 +471,7 @@ class PreviewCaptureGUI:
         # Start cameras in a background thread so the UI stays responsive
         def _start_and_begin() -> None:
             try:
-                results = self._camera_manager.start_all(ORBBEC_C1_SERIAL)
+                results = self._camera_manager.start_all(self._cfg.ORBBEC_C1_SERIAL)
                 self.root.after(0, self._on_preview_started, results)
             except Exception as exc:
                 self.root.after(0, self._on_preview_failed, str(exc))
@@ -705,7 +658,7 @@ class PreviewCaptureGUI:
         # Run in thread to avoid blocking UI
         def _list() -> None:
             try:
-                text = list_connected_cameras()
+                text = list_connected_cameras(self._cfg.ORBBEC_C1_SERIAL)
                 self.root.after(0, self._log, text)
             except Exception as exc:
                 self.root.after(0, self._log, f"列出相机失败: {exc}")
@@ -752,6 +705,19 @@ class PreviewCaptureGUI:
 # ────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="拍照控制 GUI — 实时预览并采集三路相机图像"
+    )
+    parser.add_argument(
+        "--config",
+        default="path_config_standard",
+        help="路径配置模块名，默认 %(default)s（可选 path_config_beaker / path_config_cleaner）",
+    )
+    args = parser.parse_args()
+
+    cfg = _load_path_config(args.config)
+    print(f"[配置] 使用 {args.config}")
+
     root = tk.Tk()
-    PreviewCaptureGUI(root)
+    PreviewCaptureGUI(root, cfg=cfg)
     root.mainloop()

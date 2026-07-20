@@ -30,12 +30,31 @@ CONTAINERS: dict[int, str] = {
     1: "ultrasonic_cleaner",
 }
 
+CONTAINERS_CN: dict[int, str] = {
+    1: "超声波清洗机",
+}
+
+ANOMALY_TYPES_CN: dict[int, str] = {
+    1: "正常", 2: "异物残留", 3: "水位异常", 4: "水质污染",
+}
+
+ANOMALY_SUBCATEGORIES_CN: dict[str, str] = {
+    "beaker": "烧杯", "well_plate": "孔板",
+    "reservoir": "储液槽", "screw": "螺丝",
+    "water_level_high": "水位过高", "water_level_low": "水位过低",
+    "turbid": "浑浊", "colored": "带颜色",
+}
+
 # 清洗槽拍摄点位（三个槽位）
 SHOOTING_POINTS: dict[str, str] = {
     "ultrasonic_cleaner_slot_01": "超声波清洗机槽1",
     "ultrasonic_cleaner_slot_02": "超声波清洗机槽2",
     "ultrasonic_cleaner_slot_03": "超声波清洗机槽3",
 }
+
+# 反向映射：中文 → 英文（供 GUI 下拉框使用）
+SHOOTING_POINTS_CN: dict[str, str] = {v: k for k, v in SHOOTING_POINTS.items()}
+SHOOTING_POINTS_CN_LIST: list[str] = list(SHOOTING_POINTS_CN.keys())
 
 VIEW_NAMES: dict[int, str] = {
     1: "view_top_01",

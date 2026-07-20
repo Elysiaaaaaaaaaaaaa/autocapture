@@ -44,6 +44,54 @@ CONTAINERS: dict[int, str] = {
     13: "ultrasonic_cleaner",
 }
 
+CONTAINERS_CN: dict[int, str] = {
+    1: "烧杯", 2: "试管模型1", 3: "试管模型2",
+    4: "6孔板", 5: "11孔板", 6: "24孔板",
+    7: "48孔板", 8: "96孔板模型1",
+    9: "96孔板模型2", 10: "磁力搅拌器1",
+    11: "磁力搅拌器2", 12: "储液槽", 13: "超声波清洗机",
+}
+
+ANOMALY_TYPES_CN: dict[int, str] = {
+    1: "正常", 2: "污渍", 3: "破损", 4: "液体残留",
+    5: "固体残留", 6: "盖子异常", 7: "标签异常", 8: "摆放错误",
+}
+
+ANOMALY_SUBCATEGORIES_CN: dict[str, str] = {
+    "water_stain": "水渍", "pigment_stain": "颜料污渍",
+    "scratch": "划痕", "crack": "裂痕",
+    "colorless_liquid": "无色液体", "colored_clear_liquid": "带颜色透明液体",
+    "turbid_liquid": "浑浊液体", "wall_liquid_residue": "杯壁液体",
+    "powder": "粉末", "crystalline_residue": "结晶残留",
+    "cracked_lid": "盖子裂痕", "incorrect_lid": "盖子盖错", "missing_lid": "没有盖子",
+    "label_soiling": "标签脏污", "label_detachment": "标签脱落", "label_damage": "标签破损",
+    "tilted_placement": "斜放",
+}
+
+SHOOTING_POINTS: dict[str, str] = {
+    "magnetic_stirrer_01": "磁力搅拌器1",
+    "magnetic_stirrer_02": "磁力搅拌器2",
+    "beaker_sample_carousel": "烧杯样品盘",
+    "plate_reservoir_sample_carousel": "孔板/储液槽样品盘",
+    "mixed_sample_carousel": "混合样品盘",
+    "analytical_balance": "分析天平",
+    "transfer_stage": "转移台",
+    "ultrasonic_cleaner_slot_01": "超声波清洗机槽1",
+    "ultrasonic_cleaner_slot_02": "超声波清洗机槽2",
+    "ultrasonic_cleaner_slot_03": "超声波清洗机槽3",
+    "pipetting_station": "移液站",
+    "mixer1": "搅拌器1",
+    "mixer2": "搅拌器2",
+    "stack1": "堆栈1",
+    "stack3": "堆栈3",
+    "tianping": "天平",
+    "zhuanyi": "转移",
+}
+
+# 反向映射：中文 → 英文（供 GUI 下拉框使用）
+SHOOTING_POINTS_CN: dict[str, str] = {v: k for k, v in SHOOTING_POINTS.items()}
+SHOOTING_POINTS_CN_LIST: list[str] = list(SHOOTING_POINTS_CN.keys())
+
 
 def format_containers() -> str:
     lines = ["容器编号:"]

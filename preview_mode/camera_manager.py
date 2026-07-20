@@ -25,7 +25,7 @@ import cv2
 import numpy as np
 
 from capture_base import frame_to_bgr_image
-from path_config_standard import ORBBEC_C1_SERIAL, WARMUP_FRAMES
+from path_config_standard import ORBBEC_C1_SERIAL as _DEFAULT_ORBBEC_C1_SERIAL, WARMUP_FRAMES as _DEFAULT_WARMUP_FRAMES
 
 
 # ── camera identifiers ────────────────────────────────────────────────────
@@ -39,7 +39,7 @@ CAMERA_IDS = [REALSENSE, ORBBEC_C1, ORBBEC_C2]
 _CONSECUTIVE_NONE_LIMIT = 30
 
 
-def list_connected_cameras() -> str:
+def list_connected_cameras(orbbec_c1_serial: str = _DEFAULT_ORBBEC_C1_SERIAL) -> str:
     """Return a human-readable string describing connected cameras.
 
     Safe to call before starting any streams — this performs a one-shot
@@ -74,7 +74,7 @@ def list_connected_cameras() -> str:
     for i in range(ob_list.get_count()):
         serial = ob_list.get_device_serial_number_by_index(i)
         name = ob_list.get_device_name_by_index(i)
-        role = "c1" if serial == ORBBEC_C1_SERIAL else "c2"
+        role = "c1" if serial == orbbec_c1_serial else "c2"
         lines.append(f"  - {name}  SN={serial}  -> {role}")
 
     return "\n".join(lines)
@@ -98,7 +98,8 @@ class CameraManager:
         mgr.stop_all()
     """
 
-    def __init__(self) -> None:
+    def __init__(self, warmup_frames: int = _DEFAULT_WARMUP_FRAMES) -> None:
+        self._warmup_frames = warmup_frames
         self._running = threading.Event()
 
         # per-camera state
@@ -114,7 +115,7 @@ class CameraManager:
 
     # ── public API ────────────────────────────────────────────────────
 
-    def start_all(self, orbbec_c1_serial: str = ORBBEC_C1_SERIAL) -> dict[str, bool]:
+    def start_all(self, orbbec_c1_serial: str = _DEFAULT_ORBBEC_C1_SERIAL) -> dict[str, bool]:
         """Discover cameras and start streaming threads for all three.
 
         Returns a dict mapping camera id to start-success boolean.
@@ -292,7 +293,7 @@ class CameraManager:
                 return
 
             # Warmup — let auto-exposure settle
-            for _ in range(WARMUP_FRAMES):
+            for _ in range(self._warmup_frames):
                 pipeline.wait_for_frames()
 
             self._healthy[REALSENSE] = True
@@ -386,7 +387,7 @@ class CameraManager:
                 return
 
             # Warmup
-            for _ in range(WARMUP_FRAMES):
+            for _ in range(self._warmup_frames):
                 pipeline.wait_for_frames(1000)
 
             self._healthy[camera_id] = True
