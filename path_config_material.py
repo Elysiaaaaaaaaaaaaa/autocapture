@@ -7,15 +7,15 @@ WARMUP_FRAMES = 40
 USES_MATERIAL_HIERARCHY = True
 
 MATERIAL_STATES: dict[int, str] = {
-    1: "raw_material_powder",
-    2: "intermediate_solution",
-    3: "finished_gel",
+    1: "powder",
+    2: "solution",
+    3: "gel",
 }
 
 MATERIAL_STATES_CN: dict[int, str] = {
-    1: "原材料粉末",
-    2: "中间溶液",
-    3: "成品凝胶",
+    1: "粉末",
+    2: "溶液",
+    3: "凝胶",
 }
 
 MATERIALS: dict[int, dict[int, str]] = {
@@ -92,30 +92,34 @@ MATERIALS_CN: dict[int, dict[int, str]] = {
 
 ANOMALY_TYPES: dict[int, str] = {
     1: "normal",
-    2: "caking",
-    3: "impurity_contamination",
-    4: "label_anomaly",
-    5: "color_anomaly",
-    6: "uneven_mixing",
-    7: "missing_corner",
-    8: "uncured",
+    2: "impurity",
+    3: "insufficient_quantity",
+    4: "caking",
+    5: "label_anomaly",
+    6: "color_anomaly",
+    7: "undissolved",
+    8: "bubbles",
+    9: "fracture",
+    10: "missing_corner",
 }
 
 ANOMALY_TYPES_CN: dict[int, str] = {
     1: "正常",
-    2: "结块",
-    3: "杂质污染",
-    4: "标签异常",
-    5: "颜色异常",
-    6: "搅拌不匀",
-    7: "缺角",
-    8: "未凝固",
+    2: "杂质",
+    3: "量过少",
+    4: "结块",
+    5: "标签异常",
+    6: "颜色异常",
+    7: "未溶解",
+    8: "气泡",
+    9: "断裂",
+    10: "缺角",
 }
 
 STATE_ANOMALY_TYPES: dict[int, list[int]] = {
-    1: [1, 2, 3, 4],
-    2: [1, 5, 3, 4],
-    3: [1, 5, 3, 6, 7, 8, 4],
+    1: [1, 2, 3, 4, 5],
+    2: [1, 2, 6, 7, 8],
+    3: [1, 2, 9, 10, 8],
 }
 
 CONTAINERS: dict[int, str] = {
