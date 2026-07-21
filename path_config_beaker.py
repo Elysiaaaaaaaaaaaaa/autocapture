@@ -4,26 +4,25 @@ DATASET_ROOT = Path("/home/qy/dataset-202607/quality test/empty_container")
 ORBBEC_C1_SERIAL = "CL8K14100H4"
 WARMUP_FRAMES = 15
 
+# 异常分类来源：empty_container/beaker 实际目录
 ANOMALY_TYPES: dict[int, str] = {
     1: "normal",
     2: "stain",
     3: "damage",
     4: "liquid_residue",
     5: "solid_residue",
-    6: "lid_anomaly",
-    7: "label_anomaly",
-    8: "placement_error",
+    6: "label_anomaly",
+    7: "foreign_object_residue",
 }
 
 ANOMALY_SUBCATEGORIES: dict[int, list[str]] = {
     1: [],
     2: ["water_stain", "pigment_stain"],
-    3: ["scratch", "crack"],
-    4: ["colorless_liquid", "colored_clear_liquid", "turbid_liquid", "wall_liquid_residue"],
-    5: ["powder", "crystalline_residue"],
-    6: ["cracked_lid", "incorrect_lid", "missing_lid"],
-    7: ["label_soiling", "label_detachment", "label_damage"],
-    8: ["tilted_placement"],
+    3: ["scratch", "crack", "wear"],
+    4: ["colorless_liquid", "colored_liquid", "wall_liquid_residue"],
+    5: ["bottom_powder_residue", "crystalline_residue", "wall_powder_residue"],
+    6: ["label_soiling", "label_detachment", "label_damage"],
+    7: ["glass_stirring_rod"],
 }
 
 NO_SUBCATEGORY = "-"
@@ -38,18 +37,20 @@ CONTAINERS_CN: dict[int, str] = {
 
 ANOMALY_TYPES_CN: dict[int, str] = {
     1: "正常", 2: "污渍", 3: "破损", 4: "液体残留",
-    5: "固体残留", 6: "盖子异常", 7: "标签异常", 8: "摆放错误",
+    5: "固体残留", 6: "标签异常", 7: "异物残留",
 }
 
 ANOMALY_SUBCATEGORIES_CN: dict[str, str] = {
     "water_stain": "水渍", "pigment_stain": "颜料污渍",
-    "scratch": "划痕", "crack": "裂痕",
-    "colorless_liquid": "无色液体", "colored_clear_liquid": "带颜色透明液体",
-    "turbid_liquid": "浑浊液体", "wall_liquid_residue": "杯壁液体",
-    "powder": "粉末", "crystalline_residue": "结晶残留",
-    "cracked_lid": "盖子裂痕", "incorrect_lid": "盖子盖错", "missing_lid": "没有盖子",
-    "label_soiling": "标签脏污", "label_detachment": "标签脱落", "label_damage": "标签破损",
-    "tilted_placement": "斜放",
+    "scratch": "划痕", "crack": "裂痕", "wear": "磨损",
+    "colorless_liquid": "无色液体", "colored_liquid": "带颜色液体",
+    "wall_liquid_residue": "杯壁液体",
+    "bottom_powder_residue": "底部粉末残留",
+    "crystalline_residue": "结晶残留",
+    "wall_powder_residue": "杯壁粉末残留",
+    "label_soiling": "标签脏污", "label_detachment": "标签脱落",
+    "label_damage": "标签破损",
+    "glass_stirring_rod": "玻璃搅拌棒",
 }
 
 SHOOTING_POINTS: dict[str, str] = {
@@ -59,6 +60,7 @@ SHOOTING_POINTS: dict[str, str] = {
     "magnetic_stirrer_02":           "mixer2 磁力搅拌器2",
     "analytical_balance":            "tianping 分析天平",
     "transfer_stage":                "zhuanyi 转移台",
+    "pipetting_station": "移液站"
 }
 
 # 反向映射：中文 → 英文（供 GUI 下拉框使用）
