@@ -78,6 +78,16 @@ def main():
 
     kept = len(keep_set)
     print(f"\n总计: 保留 {kept}, 跳过 {skipped}, 删除 {deleted}, 失败 {errors}")
+
+    # 检查 chosen.csv 中有哪些路径在数据集中不存在
+    missing = [p for p in keep_set if not p.is_file()]
+    if missing:
+        print(f"\nchosen.csv 中有 {len(missing)} 条路径在数据集中未找到:")
+        for p in missing:
+            print(f"  未找到: {p}")
+    else:
+        print("\nchosen.csv 中的所有路径均在数据集中找到。")
+
     if args.dry_run:
         print("这是预览模式，未实际删除任何文件。去掉 --dry-run 执行删除。")
     return 0 if errors == 0 else 1

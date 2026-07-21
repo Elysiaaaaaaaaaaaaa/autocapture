@@ -81,8 +81,9 @@ class PreviewCaptureGUI:
 
         # Load path config (pluggable)
         if cfg is None:
-            cfg = _load_path_config("path_config_standard")
+            cfg = _load_path_config("path_config_material")
         self._cfg = cfg
+        self._material_mode = bool(getattr(cfg, "USES_MATERIAL_HIERARCHY", False))
 
         root.title("拍照控制 — 实时预览")
         root.minsize(1000, 800)
@@ -166,16 +167,21 @@ class PreviewCaptureGUI:
         section = ttk.LabelFrame(parent, text="拍摄参数", padding=6)
         section.pack(fill=tk.X)
 
+        if self._material_mode:
+            self._build_material_param_fields(section)
+            return
+
         # Row 0: container + anomaly type
         row0 = ttk.Frame(section)
         row0.pack(fill=tk.X, pady=1)
-        ttk.Label(row0, text="容器:", width=10).pack(side=tk.LEFT)
+        object_label = getattr(self._cfg, "OBJECT_LABEL_CN", "容器:")
+        ttk.Label(row0, text=object_label, width=10).pack(side=tk.LEFT)
         self._container_var = tk.StringVar()
         self._container_cb = ttk.Combobox(
             row0, textvariable=self._container_var, state="readonly", width=30
         )
         self._container_cb.pack(side=tk.LEFT, padx=(0, 16))
-        self._container_var.trace_add("write", self._on_path_field_change)
+        self._container_var.trace_add("write", self._on_container_change)
 
         ttk.Label(row0, text="异常类型:", width=10).pack(side=tk.LEFT)
         self._anomaly_var = tk.StringVar()
@@ -239,19 +245,106 @@ class PreviewCaptureGUI:
         # Populate combobox values
         self._populate_params()
 
+    def _build_material_param_fields(self, section: ttk.Frame) -> None:
+        row0 = ttk.Frame(section)
+        row0.pack(fill=tk.X, pady=1)
+        ttk.Label(row0, text="材料状态:", width=10).pack(side=tk.LEFT)
+        self._state_var = tk.StringVar()
+        self._state_cb = ttk.Combobox(
+            row0, textvariable=self._state_var, state="readonly", width=24
+        )
+        self._state_cb.pack(side=tk.LEFT, padx=(0, 16))
+        self._state_var.trace_add("write", self._on_material_state_change)
+
+        ttk.Label(row0, text="具体材料:", width=10).pack(side=tk.LEFT)
+        self._material_var = tk.StringVar()
+        self._material_cb = ttk.Combobox(
+            row0, textvariable=self._material_var, state="readonly", width=38
+        )
+        self._material_cb.pack(side=tk.LEFT)
+        self._material_var.trace_add("write", self._on_material_change)
+
+        row1 = ttk.Frame(section)
+        row1.pack(fill=tk.X, pady=1)
+        ttk.Label(row1, text="异常类型:", width=10).pack(side=tk.LEFT)
+        self._anomaly_var = tk.StringVar()
+        self._anomaly_cb = ttk.Combobox(
+            row1, textvariable=self._anomaly_var, state="readonly", width=30
+        )
+        self._anomaly_cb.pack(side=tk.LEFT, padx=(0, 16))
+        self._anomaly_var.trace_add("write", self._on_anomaly_change)
+
+        ttk.Label(row1, text="容器种类:", width=10).pack(side=tk.LEFT)
+        self._container_var = tk.StringVar()
+        self._container_cb = ttk.Combobox(
+            row1, textvariable=self._container_var, state="readonly", width=30
+        )
+        self._container_cb.pack(side=tk.LEFT)
+        self._container_var.trace_add("write", self._on_container_change)
+
+        row2 = ttk.Frame(section)
+        row2.pack(fill=tk.X, pady=1)
+        ttk.Label(row2, text="拍摄点位:", width=10).pack(side=tk.LEFT)
+        self._point_var = tk.StringVar()
+        self._point_cb = ttk.Combobox(
+            row2, textvariable=self._point_var, state="readonly", width=30
+        )
+        self._point_cb.pack(side=tk.LEFT)
+        self._point_var.trace_add("write", self._on_path_field_change)
+
+        row3 = ttk.Frame(section)
+        row3.pack(fill=tk.X, pady=1)
+        ttk.Label(row3, text="视角编号:", width=10).pack(side=tk.LEFT)
+        self._view_var = tk.StringVar(value="1")
+        ttk.Entry(row3, textvariable=self._view_var, width=10).pack(side=tk.LEFT)
+        self._view_var.trace_add("write", self._on_path_field_change)
+
+        ttk.Label(row3, text="照片编号:", width=10).pack(
+            side=tk.LEFT, padx=(28, 0)
+        )
+        self._photo_var = tk.IntVar(value=1)
+        ttk.Spinbox(
+            row3, from_=1, to=999, textvariable=self._photo_var, width=8
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            row3, text="Next", width=6, command=self._next_photo_number
+        ).pack(side=tk.LEFT, padx=(6, 0))
+
+        row4 = ttk.Frame(section)
+        row4.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(row4, text="保存路径:", width=10).pack(side=tk.LEFT)
+        self._path_var = tk.StringVar()
+        ttk.Entry(
+            row4,
+            textvariable=self._path_var,
+            state="readonly",
+            font=("Consolas", 9),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        self._populate_params()
+
     def _populate_params(self) -> None:
         """Fill comboboxes with values from the loaded path config."""
+        if self._material_mode:
+            self._populate_material_params()
+            return
+
         c_items = [f"{k}: {v}" for k, v in sorted(self._cfg.CONTAINERS_CN.items())]
         self._container_cb["values"] = c_items
         if c_items:
             self._container_var.set(c_items[0])
 
-        a_items = [f"{k}: {v}" for k, v in sorted(self._cfg.ANOMALY_TYPES_CN.items())]
-        self._anomaly_cb["values"] = a_items
-        if a_items:
-            self._anomaly_var.set(a_items[0])
+        self._update_anomalies()
 
-        self._update_subcategories()
+    def _populate_material_params(self) -> None:
+        items = [
+            f"{sid}: {self._cfg.MATERIAL_STATES_CN[sid]}"
+            for sid in sorted(self._cfg.MATERIAL_STATES)
+        ]
+        self._state_cb["values"] = items
+        if items:
+            self._state_var.set(items[0])
+        self._update_material_dependent_fields()
 
     # ── button section ────────────────────────────────────────────────
 
@@ -299,8 +392,105 @@ class PreviewCaptureGUI:
 
     # ── parameter callbacks ───────────────────────────────────────────
 
+    def _current_combo_id(self, variable: tk.StringVar) -> int | None:
+        try:
+            return int(variable.get().split(":", 1)[0])
+        except (ValueError, IndexError):
+            return None
+
+    def _require_combo_id(self, variable: tk.StringVar, label: str) -> int:
+        value_id = self._current_combo_id(variable)
+        if value_id is None:
+            raise ValueError(f"请选择{label}")
+        return value_id
+
+    def _set_id_options(
+        self,
+        combobox: ttk.Combobox,
+        variable: tk.StringVar,
+        options: dict[int, str],
+        current_id: int | None = None,
+    ) -> None:
+        items = [f"{item_id}: {name}" for item_id, name in sorted(options.items())]
+        combobox["values"] = items
+        if not items:
+            variable.set("")
+            return
+        selected_id = current_id if current_id in options else min(options)
+        selected = f"{selected_id}: {options[selected_id]}"
+        if variable.get() != selected:
+            variable.set(selected)
+
+    def _on_material_state_change(self, *_args) -> None:
+        if not self._material_mode:
+            return
+        self._photo_var.set(1)
+        self._update_material_dependent_fields()
+        self._update_path_preview()
+
+    def _on_material_change(self, *_args) -> None:
+        if not self._material_mode:
+            return
+        self._photo_var.set(1)
+        self._update_path_preview()
+
+    def _update_material_dependent_fields(self) -> None:
+        state_id = self._current_combo_id(self._state_var)
+        if state_id is None:
+            return
+
+        self._set_id_options(
+            self._material_cb,
+            self._material_var,
+            self._cfg.MATERIALS_CN[state_id],
+            self._current_combo_id(self._material_var),
+        )
+        self._set_id_options(
+            self._anomaly_cb,
+            self._anomaly_var,
+            {
+                aid: self._cfg.ANOMALY_TYPES_CN[aid]
+                for aid in self._cfg.get_anomaly_types(state_id)
+            },
+            self._current_combo_id(self._anomaly_var),
+        )
+        self._set_id_options(
+            self._container_cb,
+            self._container_var,
+            {
+                cid: self._cfg.CONTAINERS_CN[cid]
+                for cid in self._cfg.get_containers(state_id)
+            },
+            self._current_combo_id(self._container_var),
+        )
+        self._update_material_points()
+
+    def _update_material_points(self) -> None:
+        state_id = self._current_combo_id(self._state_var)
+        container_id = self._current_combo_id(self._container_var)
+        if state_id is None or container_id is None:
+            return
+
+        points = self._cfg.get_shooting_points(state_id, container_id)
+        items = [self._cfg.SHOOTING_POINTS[point] for point in points]
+        self._point_cb["values"] = items
+        if self._point_var.get() not in items:
+            self._point_var.set(items[0] if items else "")
+
+    def _on_container_change(self, *_args) -> None:
+        self._photo_var.set(1)
+        if self._material_mode:
+            self._update_material_points()
+            self._update_path_preview()
+            return
+        self._update_anomalies()
+        self._update_path_preview()
+
     def _on_anomaly_change(self, *_args) -> None:
         self._photo_var.set(1)
+        if self._material_mode:
+            self._update_path_preview()
+            return
         self._update_subcategories()
         self._update_path_preview()
 
@@ -319,6 +509,38 @@ class PreviewCaptureGUI:
         subs_en = {v: k for k, v in self._cfg.ANOMALY_SUBCATEGORIES_CN.items()}
         return subs_en.get(sub, sub)
 
+    def _update_anomalies(self) -> None:
+        container_text = self._container_var.get()
+        if not container_text:
+            return
+        try:
+            container_id = int(container_text.split(":")[0])
+        except (ValueError, IndexError):
+            container_id = min(self._cfg.CONTAINERS)
+
+        if hasattr(self._cfg, "get_anomaly_types"):
+            anomaly_ids = self._cfg.get_anomaly_types(container_id)
+        else:
+            anomaly_ids = sorted(self._cfg.ANOMALY_TYPES)
+
+        current_id = None
+        try:
+            current_id = int(self._anomaly_var.get().split(":")[0])
+        except (ValueError, IndexError):
+            pass
+
+        items = [f"{aid}: {self._cfg.ANOMALY_TYPES_CN[aid]}" for aid in anomaly_ids]
+        self._anomaly_cb["values"] = items
+        if not items:
+            self._anomaly_var.set("")
+            return
+
+        selected_id = current_id if current_id in anomaly_ids else anomaly_ids[0]
+        self._anomaly_var.set(
+            f"{selected_id}: {self._cfg.ANOMALY_TYPES_CN[selected_id]}"
+        )
+        self._update_subcategories()
+
     def _update_subcategories(self) -> None:
         text = self._anomaly_var.get()
         if not text:
@@ -328,7 +550,15 @@ class PreviewCaptureGUI:
         except (ValueError, IndexError):
             aid = 1
 
-        subs = self._cfg.ANOMALY_SUBCATEGORIES.get(aid, [])
+        try:
+            cid = int(self._container_var.get().split(":")[0])
+        except (ValueError, IndexError):
+            cid = min(self._cfg.CONTAINERS)
+
+        if hasattr(self._cfg, "get_anomaly_subcategories"):
+            subs = self._cfg.get_anomaly_subcategories(cid, aid)
+        else:
+            subs = self._cfg.ANOMALY_SUBCATEGORIES.get(aid, [])
         subs_display = [self._cfg.ANOMALY_SUBCATEGORIES_CN.get(s, s) for s in subs]
         if aid == 1 or not subs:
             self._sub_cb["state"] = tk.DISABLED
@@ -350,6 +580,22 @@ class PreviewCaptureGUI:
         self._current_camera = self._cam_var.get()
 
     # ── path building ─────────────────────────────────────────────────
+
+    def _parse_material_params(self) -> tuple[int, int, int, int, str, str, int]:
+        state_id = self._require_combo_id(self._state_var, "材料状态")
+        material_id = self._require_combo_id(self._material_var, "具体材料")
+        anomaly_id = self._require_combo_id(self._anomaly_var, "异常类型")
+        container_id = self._require_combo_id(self._container_var, "容器类型")
+        point = self._get_shooting_point()
+        view = self._view_var.get().strip()
+        photo = self._photo_var.get()
+
+        if not point:
+            raise ValueError("请选择拍摄点位")
+        if not view:
+            raise ValueError("请填写视角编号")
+
+        return state_id, material_id, anomaly_id, container_id, point, view, photo
 
     def _parse_params(self) -> tuple[int, int, str, str, str, int]:
         """Extract (container_id, anomaly_id, sub, point, view, photo)
@@ -380,14 +626,30 @@ class PreviewCaptureGUI:
         return messagebox.askyesno("文件已存在", msg)
 
     def _build_output_dir(self) -> Path:
+        if self._material_mode:
+            state, material, anomaly, container, point, view, _photo = (
+                self._parse_material_params()
+            )
+            return self._cfg.build_shot_dir(
+                state, material, anomaly, container, point, view
+            )
+
         cid, aid, sub, point, view, _photo = self._parse_params()
         return self._cfg.build_shot_dir(cid, aid, sub, point, view)
 
     def _build_output_paths(self) -> dict[str, Path]:
         """Return ``{camera_id: output_file_path}`` for the current
         parameter selection."""
-        cid, aid, sub, point, view, photo = self._parse_params()
-        shot_dir = self._cfg.build_shot_dir(cid, aid, sub, point, view)
+        if self._material_mode:
+            state, material, anomaly, container, point, view, photo = (
+                self._parse_material_params()
+            )
+            shot_dir = self._cfg.build_shot_dir(
+                state, material, anomaly, container, point, view
+            )
+        else:
+            cid, aid, sub, point, view, photo = self._parse_params()
+            shot_dir = self._cfg.build_shot_dir(cid, aid, sub, point, view)
 
         photo_id = f"{photo:03d}"
         orbbec_dir = shot_dir / f"view_top_{photo}"
@@ -710,8 +972,11 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--config",
-        default="path_config_standard",
-        help="路径配置模块名，默认 %(default)s（可选 path_config_beaker / path_config_cleaner）",
+        default="path_config_material",
+        help=(
+            "路径配置模块名，默认 %(default)s（可选 path_config_standard / "
+            "path_config_beaker / path_config_cleaner）"
+        ),
     )
     args = parser.parse_args()
 

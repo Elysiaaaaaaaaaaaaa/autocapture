@@ -1,0 +1,55 @@
+<Project_Root>/
+├── empty_container/                 # 空容器参考（不展开，仅目录）
+│
+└── material/
+    ├── Raw_Powders/                 # 原材料粉末
+    │   ├── Polyvinyl_alcohol/       # 具体粉末材料（列表见下方对照）
+    │   │   ├── Reservoir/           # 储液槽
+    │   │   │   ├── point_01/
+    │   │   │   ├── point_02/
+    │   │   │   └── ...
+    │   │   └── Soft_Bottle/         # 软胶瓶
+    │   │       ├── point_01/        # 标准点位
+    │   │       ├── point_02/
+    │   │       ├── ...
+    │   │       ├── Soft_Bottle_Slot_01/   # 新增软胶瓶槽点位
+    │   │       └── Soft_Bottle_Slot_02/   # （可扩展）
+    │   ├── Acrylamide/              # 其他粉末材料，结构相同
+    │   ├── Potassium_persulfate/
+    │   └── ...                      # 所有粉末材料（见对照表）
+    │
+    ├── Intermediate_Solutions/      # 中间溶液
+    │   ├── liquid1/                 # 4种溶液之一
+    │   │   ├── Reservoir/           # 储液槽（原有）
+    │   │   │   ├── point_01/
+    │   │   │   └── ...
+    │   │   ├── Beaker/              # 新增：烧杯
+    │   │   │   ├── point_01/        # 照搬 standard
+    │   │   │   └── ...
+    │   │   ├── 6-well_plate/        # 新增：6孔板
+    │   │   │   ├── point_01/
+    │   │   │   └── ...
+    │   │   ├── 24-well_plate/       # 新增：24孔板
+    │   │   │   ├── point_01/
+    │   │   │   └── ...
+    │   │   └── 48-well_plate/       # 新增：48孔板
+    │   │       ├── point_01/
+    │   │       └── ...
+    │   ├── liquid2/                 # 同样结构
+    │   │   ├── Reservoir/
+    │   │   ├── Beaker/
+    │   │   ├── 6-well_plate/
+    │   │   ├── 24-well_plate/
+    │   │   └── 48-well_plate/
+    │   ├── liquid3/                 # 同上
+    │   └── liquid4/                 # 同上
+    │
+    └── Finished_Gels/               # 成品凝胶
+        ├── gel1/                    # 3种凝胶之一
+        │   └── Reservoir/           # 仅储液槽
+        │       ├── point_01/
+        │       └── ...
+        ├── gel2/                    # 同上
+        │   └── Reservoir/
+        └── gel3/                    # 同上
+            └── Reservoir/
