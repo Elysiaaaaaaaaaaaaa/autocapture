@@ -7,13 +7,13 @@ WARMUP_FRAMES = 40
 USES_MATERIAL_HIERARCHY = True
 
 MATERIAL_STATES: dict[int, str] = {
-    1: "powder",
+    1: "raw_material",
     2: "solution",
     3: "gel",
 }
 
 MATERIAL_STATES_CN: dict[int, str] = {
-    1: "粉末",
+    1: "原材料",
     2: "溶液",
     3: "凝胶",
 }
@@ -117,7 +117,7 @@ ANOMALY_TYPES_CN: dict[int, str] = {
 }
 
 STATE_ANOMALY_TYPES: dict[int, list[int]] = {
-    1: [1, 2, 3, 4, 5],
+    1: [1, 2, 3, 4, 5, 6],
     2: [1, 2, 6, 7, 8],
     3: [1, 2, 9, 10, 8],
 }
