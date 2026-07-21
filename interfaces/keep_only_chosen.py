@@ -7,7 +7,7 @@ import sys
 import csv
 from pathlib import Path
 
-DATASET_ROOT = Path("/home/qy/dataset-202607/quality test/empty_container")
+DATASET_ROOT = Path("/home/qy/dataset-202607/quality test/dataset/empty_container")
 CSV_PATH = Path(__file__).parent / "chosen.csv"
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp"}

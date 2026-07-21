@@ -32,7 +32,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="批量修复特定视角的 RealSense 偏绿图片"
     )
-    parser.add_argument("root", type=str, help="数据集根目录，例如 /home/qy/dataset-202607/quality test/empty container")
+    parser.add_argument("root", type=str, help="数据集根目录，例如 /home/qy/dataset-202607/quality test/dataset/empty_container")
     parser.add_argument("--views", nargs="+", required=True, help="要修复的视角目录名，例如 stack1-004 stack1-005")
     parser.add_argument("--dry-run", action="store_true", help="只预览不实际修改")
     parser.add_argument("--suffix", default="_Color.png", help="要修复的文件后缀，默认为 _Color.png")

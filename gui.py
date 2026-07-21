@@ -14,10 +14,10 @@ from pathlib import Path
 # 数据来源: capture.py / parallel_cap.py / path_config_standard.py
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
-BASE = Path("/home/qy/dataset-202607/quality test")
+BASE = Path("/home/qy/dataset-202607/quality test/dataset")
 
 CAPTURE_CONFIG = {
-    "dataset_root": BASE / "empty container",
+    "dataset_root": BASE / "empty_container",
     "containers": {1: "beaker", 2: "test tube", 3: "test tube modle2",
                    4: "6-well plate", 5: "11-well plate", 6: "24-well plate",
                    7: "48-well plate", 8: "96-well plate modle1",

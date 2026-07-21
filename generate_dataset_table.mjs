@@ -397,7 +397,7 @@ function printUsage() {
 选项：
   --input <目录>   数据集根目录
                    默认：DATASET_ROOT 环境变量，或
-                   /home/qy/dataset-202607/quality test/empty_container
+                   /home/qy/dataset-202607/quality test/dataset/empty_container
   --output <文件>  xlsx 输出路径
                    默认：项目 outputs/<数据集名>_数据集统计表.xlsx
   --name <名称>    表格标题中的数据集名称，默认使用输入目录名
@@ -416,7 +416,7 @@ async function main() {
   requireFlagValue(args, "--name");
 
   const scriptRoot = path.dirname(fileURLToPath(import.meta.url));
-  const defaultInput = process.env.DATASET_ROOT ?? "/home/qy/dataset-202607/quality test/empty_container";
+  const defaultInput = process.env.DATASET_ROOT ?? "/home/qy/dataset-202607/quality test/dataset/empty_container";
   const inputPath = path.resolve(getFlag(args, "--input") ?? defaultInput);
   const datasetName = getFlag(args, "--name") ?? path.basename(inputPath);
   const outputPath = path.resolve(
