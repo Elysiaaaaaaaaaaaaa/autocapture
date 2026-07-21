@@ -45,11 +45,9 @@ ANOMALY_SUBCATEGORIES_CN: dict[str, str] = {
     "turbid": "浑浊", "colored": "带颜色",
 }
 
-# 清洗槽拍摄点位（三个槽位）
+# 清洗槽拍摄点位（单一点位）
 SHOOTING_POINTS: dict[str, str] = {
-    "ultrasonic_cleaner_slot_01": "超声波清洗机槽1",
-    "ultrasonic_cleaner_slot_02": "超声波清洗机槽2",
-    "ultrasonic_cleaner_slot_03": "超声波清洗机槽3",
+    "ultrasonic_cleaner": "超声波清洗机",
 }
 
 # 反向映射：中文 → 英文（供 GUI 下拉框使用）
@@ -146,7 +144,7 @@ def build_shot_dir(
     sub_name = sub_anomaly.strip()
 
     if not point_name or "/" in point_name:
-        raise ValueError("拍摄点位应直接填写点位名，例如 ultrasonic_cleaner_slot_01")
+        raise ValueError("拍摄点位应直接填写点位名，例如 ultrasonic_cleaner")
 
     if point_name not in SHOOTING_POINTS:
         known = ", ".join(SHOOTING_POINTS)
