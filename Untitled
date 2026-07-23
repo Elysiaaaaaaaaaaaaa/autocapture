@@ -2,7 +2,7 @@
 ├── empty_container/                 # 空容器参考（不展开，仅目录）
 │
 └── material/
-    ├── Raw_Powders/                 # 原材料粉末
+    ├── Raw_Material/                 # 原材料粉末
     │   ├── Polyvinyl_alcohol/       # 具体粉末材料（列表见下方对照）
     │   │   ├── Reservoir/           # 储液槽
     │   │   │   ├── point_01/

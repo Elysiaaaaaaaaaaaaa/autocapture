@@ -92,8 +92,13 @@ class PreviewCaptureGUI:
         self._camera_manager: CameraManager | None = None
         self._preview_active = False
         self._capturing = False
+        # Keyboard shortcut state
+        self._kb_mode: str | None = None  # 'material' | 'anomaly' | None
+        self._kb_buffer: str = ""
+        self._kb_after_id: str | None = None
         self._current_camera = REALSENSE
         self._imgtk: ImageTk.PhotoImage | None = None
+        self._kb_status_var = tk.StringVar()
         self._after_id: str | None = None
 
         # Theme
@@ -120,6 +125,7 @@ class PreviewCaptureGUI:
         ttk.Separator(main, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=6)
         self._build_button_section(main)
         self._build_log_section(main)
+        self._setup_keyboard_shortcuts()
 
     # ── preview section ───────────────────────────────────────────────
 
@@ -376,6 +382,16 @@ class PreviewCaptureGUI:
             row, text="列出相机", command=self._do_list_cameras
         )
         self._list_btn.pack(side=tk.LEFT)
+
+        # Keyboard shortcut status label (fixed-width, no layout shift)
+        self._kb_status_label = ttk.Label(
+            row,
+            textvariable=self._kb_status_var,
+            foreground="#555",
+            width=36,
+            anchor=tk.W,
+        )
+        self._kb_status_label.pack(side=tk.LEFT, padx=(16, 0))
 
     # ── log section ───────────────────────────────────────────────────
 
@@ -952,6 +968,210 @@ class PreviewCaptureGUI:
         self._log_area.insert(tk.END, msg + "\n")
         self._log_area.see(tk.END)
         self._log_area["state"] = tk.DISABLED
+
+    # ── keyboard shortcuts ────────────────────────────────────────────
+
+    def _setup_keyboard_shortcuts(self) -> None:
+        """Register global keyboard and mouse bindings for quick operation."""
+        self.root.bind("<Key>", self._on_key_press, add=True)
+        # Cancel pending input on any mouse click
+        self.root.bind("<Button-1>", self._on_mouse_cancel, add=True)
+
+    def _is_editable_widget(self, widget) -> bool:
+        """Return True if *widget* is a writable text-entry control."""
+        if widget is None:
+            return False
+        # ttk.Entry covers both plain Entry and Spinbox
+        if isinstance(widget, (tk.Entry, tk.Text, ttk.Entry)):
+            return True
+        # ttk.Combobox is editable unless state="readonly"
+        if isinstance(widget, ttk.Combobox):
+            try:
+                return widget.cget("state") != "readonly"
+            except tk.TclError:
+                return False
+        return False
+
+    def _on_key_press(self, event: tk.Event) -> str | None:
+        """Global key handler for shortcut sequences.
+
+        Implemented per ``.plan/preview-gui-keyboard-control.md``.
+        Returns ``"break"`` for consumed events; ``None`` otherwise.
+        """
+        # During capture — ignore all shortcuts
+        if self._capturing:
+            return "break"
+
+        focus = self.root.focus_get()
+        editable = self._is_editable_widget(focus)
+
+        # ── Space: trigger capture (only when not in kb input mode) ──
+        if event.keysym == "space" and not editable:
+            if self._kb_mode is None:
+                self._do_capture()
+            return "break"
+
+        # ── Escape: cancel input mode ──
+        if event.keysym == "Escape" and self._kb_mode is not None:
+            self._kb_cancel()
+            return "break"
+
+        # ── M / m: material selection mode ──
+        if event.char in ("m", "M") and not editable:
+            if self._material_mode:
+                self._enter_kb_mode("material")
+            return "break"
+
+        # ── E / e: anomaly selection mode ──
+        if event.char in ("e", "E") and not editable:
+            self._enter_kb_mode("anomaly")
+            return "break"
+
+        # ── Digit input (only in kb mode) ──
+        if event.char in "0123456789" and self._kb_mode is not None and not editable:
+            self._kb_append_digit(event.char)
+            return "break"
+
+        # ── Backspace (only in kb mode) ──
+        if event.keysym == "BackSpace" and self._kb_mode is not None and not editable:
+            self._kb_backspace()
+            return "break"
+
+        # ── Enter / Return: submit buffer (in kb mode) ──
+        if event.keysym == "Return" and self._kb_mode is not None:
+            self._kb_submit()
+            return "break"
+
+        return None
+
+    def _on_mouse_cancel(self, _event: tk.Event) -> None:
+        """Cancel pending keyboard input on any mouse click."""
+        if self._kb_mode is not None:
+            self._kb_cancel()
+
+    def _enter_kb_mode(self, mode: str) -> None:
+        """Enter *mode* ('material' | 'anomaly') keyboard-input mode."""
+        if self._kb_after_id is not None:
+            self.root.after_cancel(self._kb_after_id)
+            self._kb_after_id = None
+        if self._kb_mode == mode:
+            # Same mode again: clear buffer but stay in mode
+            self._kb_buffer = ""
+        else:
+            self._kb_mode = mode
+            self._kb_buffer = ""
+        self._update_kb_status()
+
+    def _kb_append_digit(self, digit: str) -> None:
+        """Append *digit* to the keyboard input buffer."""
+        self._kb_buffer += digit
+        self._update_kb_status()
+
+    def _kb_backspace(self) -> None:
+        """Remove the last digit from the keyboard buffer."""
+        if self._kb_buffer:
+            self._kb_buffer = self._kb_buffer[:-1]
+        self._update_kb_status()
+
+    def _kb_cancel(self) -> None:
+        """Cancel keyboard input mode and clear all state."""
+        if self._kb_after_id is not None:
+            self.root.after_cancel(self._kb_after_id)
+            self._kb_after_id = None
+        self._kb_mode = None
+        self._kb_buffer = ""
+        self._kb_status_var.set("")
+
+    def _kb_submit(self) -> None:
+        """Submit the current digit buffer as a numeric ID selection.
+
+        On success, updates the dropdown briefly shows the chosen label and
+        exits input mode.  On failure, shows valid IDs, rings the bell, and
+        stays in input mode so the user can correct.
+        """
+        if not self._kb_buffer:
+            return  # stay in mode, wait for digits
+
+        item_id = int(self._kb_buffer)  # strips leading zeros
+        mode = self._kb_mode
+
+        if mode == "material":
+            if not self._material_mode:
+                self._kb_cancel()
+                return
+            ok = self._select_kb_item(self._material_cb, self._material_var, item_id)
+            if ok:
+                label = self._material_var.get()
+                self._kb_status_var.set(f"✓ {label}")
+                self._schedule_kb_clear()
+            else:
+                valid = self._get_kb_valid_ids(self._material_cb)
+                self._kb_status_var.set(f"无效编号，可选: {', '.join(valid)}")
+                self.root.bell()
+                return  # stay in mode
+
+        elif mode == "anomaly":
+            ok = self._select_kb_item(self._anomaly_cb, self._anomaly_var, item_id)
+            if ok:
+                label = self._anomaly_var.get()
+                self._kb_status_var.set(f"✓ {label}")
+                self._schedule_kb_clear()
+            else:
+                valid = self._get_kb_valid_ids(self._anomaly_cb)
+                self._kb_status_var.set(f"无效编号，可选: {', '.join(valid)}")
+                self.root.bell()
+                return  # stay in mode
+
+        # Success: exit input mode
+        self._kb_mode = None
+        self._kb_buffer = ""
+
+    def _select_kb_item(
+        self,
+        combobox: ttk.Combobox,
+        variable: tk.StringVar,
+        item_id: int,
+    ) -> bool:
+        """Select the combobox entry whose numeric prefix matches *item_id*.
+
+        Returns ``True`` on success, ``False`` if no such entry exists.
+        """
+        prefix = f"{item_id}:"
+        for item in combobox["values"]:
+            if item.startswith(prefix):
+                variable.set(item)
+                return True
+        return False
+
+    def _get_kb_valid_ids(self, combobox: ttk.Combobox) -> list[str]:
+        """Return sorted string IDs extracted from combobox values."""
+        ids = []
+        for item in combobox["values"]:
+            try:
+                iid = int(item.split(":", 1)[0])
+                ids.append(str(iid))
+            except (ValueError, IndexError):
+                pass
+        return ids
+
+    def _update_kb_status(self) -> None:
+        """Refresh the status label with current keyboard input state."""
+        if self._kb_mode is None:
+            self._kb_status_var.set("")
+            return
+        label = "材料编号" if self._kb_mode == "material" else "异常编号"
+        self._kb_status_var.set(f"{label}: {self._kb_buffer}")
+
+    def _schedule_kb_clear(self) -> None:
+        """Schedule the status label to clear after a brief pause."""
+        if self._kb_after_id is not None:
+            self.root.after_cancel(self._kb_after_id)
+        self._kb_after_id = self.root.after(2500, self._clear_kb_status)
+
+    def _clear_kb_status(self) -> None:
+        """Clear the keyboard status label (called via ``after``)."""
+        self._kb_after_id = None
+        self._kb_status_var.set("")
 
     # ── shutdown ──────────────────────────────────────────────────────
 
