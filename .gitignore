@@ -1,6 +1,5 @@
 venv/
 __pycache__/
-*.csv
 Log/
 node_modules
 table-generator/
