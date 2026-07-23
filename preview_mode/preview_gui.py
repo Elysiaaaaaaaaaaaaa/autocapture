@@ -403,6 +403,8 @@ class PreviewCaptureGUI:
             font=("Consolas", 9),
             wrap=tk.WORD,
             state=tk.DISABLED,
+            # Keep focus off the log so global shortcuts stay active after capture.
+            takefocus=False,
         )
         self._log_area.pack(fill=tk.BOTH, expand=True)
 
@@ -900,12 +902,14 @@ class PreviewCaptureGUI:
         current = self._photo_var.get()
         self._photo_var.set(current + 1)
         self._update_path_preview()
+        self._ensure_shortcut_focus()
 
     def _on_capture_error(self, error_msg: str) -> None:
         self._log(f"拍照出错: {error_msg}")
         messagebox.showerror("拍照失败", error_msg)
         self._capturing = False
         self._capture_btn["state"] = tk.NORMAL
+        self._ensure_shortcut_focus()
 
     # ── dry-run ───────────────────────────────────────────────────────
 
@@ -976,18 +980,46 @@ class PreviewCaptureGUI:
         self.root.bind("<Key>", self._on_key_press, add=True)
         # Cancel pending input on any mouse click
         self.root.bind("<Button-1>", self._on_mouse_cancel, add=True)
+        # Button class bindings run *before* toplevel bindings, so Space/Return
+        # would activate the focused button and either double-fire capture or
+        # steal Enter from kb-submit. Intercept at widget level first.
+        for btn in (
+            self._preview_btn,
+            self._stop_preview_btn,
+            self._capture_btn,
+            self._dryrun_btn,
+            self._list_btn,
+        ):
+            btn.bind("<KeyPress-space>", self._on_key_press, add=True)
+            btn.bind("<KeyPress-Return>", self._on_key_press, add=True)
+
+    def _ensure_shortcut_focus(self) -> None:
+        """Move focus off editable widgets so the next shortcut still works."""
+        try:
+            self.root.focus_set()
+        except tk.TclError:
+            pass
 
     def _is_editable_widget(self, widget) -> bool:
         """Return True if *widget* is a writable text-entry control."""
         if widget is None:
             return False
-        # ttk.Entry covers both plain Entry and Spinbox
-        if isinstance(widget, (tk.Entry, tk.Text, ttk.Entry)):
-            return True
+        # Disabled log Text must not block shortcuts
+        if isinstance(widget, tk.Text):
+            try:
+                return str(widget.cget("state")) == "normal"
+            except tk.TclError:
+                return False
+        # ttk.Entry covers plain Entry and Spinbox — only when enabled
+        if isinstance(widget, (tk.Entry, ttk.Entry)):
+            try:
+                return str(widget.cget("state")) != "disabled"
+            except tk.TclError:
+                return True
         # ttk.Combobox is editable unless state="readonly"
         if isinstance(widget, ttk.Combobox):
             try:
-                return widget.cget("state") != "readonly"
+                return str(widget.cget("state")) != "readonly"
             except tk.TclError:
                 return False
         return False
@@ -1009,6 +1041,7 @@ class PreviewCaptureGUI:
         if event.keysym == "space" and not editable:
             if self._kb_mode is None:
                 self._do_capture()
+            self._ensure_shortcut_focus()
             return "break"
 
         # ── Escape: cancel input mode ──
@@ -1060,6 +1093,7 @@ class PreviewCaptureGUI:
         else:
             self._kb_mode = mode
             self._kb_buffer = ""
+        self._ensure_shortcut_focus()
         self._update_kb_status()
 
     def _kb_append_digit(self, digit: str) -> None:
@@ -1125,6 +1159,7 @@ class PreviewCaptureGUI:
         # Success: exit input mode
         self._kb_mode = None
         self._kb_buffer = ""
+        self._ensure_shortcut_focus()
 
     def _select_kb_item(
         self,
