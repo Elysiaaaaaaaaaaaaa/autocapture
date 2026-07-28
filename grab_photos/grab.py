@@ -27,6 +27,17 @@
 命令行参数可作为一次性覆盖（不传则用脚本里写的）：
     python grab.py --dry-run            # 只预览
     python grab.py --category empty_container --type beaker ...   # 临时用 CLI
+
+字段支持“中文 / 编号 / 英文”三种写法，脚本会按 path_config_*.py 的 *_CN 对照表
+自动转义为磁盘上的真实英文目录名，例如：
+    type=烧杯 / type=1        -> beaker
+    anomaly=正常 / anomaly=1  -> normal
+    anomaly=污渍/水渍         -> stain/water_stain
+    point_view=磁力搅拌器1-001 -> magnetic_stirrer_01-001
+（直接写英文则原样使用；写中文/编号若未命中对照表会警告并按原样使用。）
+材料(material)的 type 编号按所选 state 解析：同一编号在不同状态下对应不同材料，
+例如 state=溶液 时 type=1 -> liquid1，state=原材料 时 type=1 -> 01:polyvinyl_alcohol；
+因此 material 用编号填 type 时请同时给出 state（中文/编号/英文均可）。
 """
 
 # ==========================================================================
@@ -38,24 +49,26 @@ DESCRIPTION = """烧杯正常样本，磁力搅拌器1双视角。
 """
 
 # 2) 图片序列：每行一个条目。顺序即抓取顺序。
-#    字段说明：
+#    字段说明（均支持“英文 / 中文 / 编号”三种写法，自动转义为英文目录名）：
 #      category   : "empty_container" 或 "material"
-#      type       : 容器/材料类型（文件夹名，如 beaker / polyvinyl_alcohol）
-#      anomaly    : 异常类型（可带小类，用 "/" 分隔，如 "stain/water_stain"）
-#      point_view : 点位-视角（如 "magnetic_stirrer_01-001"；仅写点位则抓该点位全部视角）
-#      sub        : 小类名（消歧用，可留 None），如 "water_stain"
-#      container  : 容器名（material 消歧用，可留 None），如 "liquid_reservoir"
-#      state      : 材料状态（material 消歧用，可留 None），如 "raw_material"
+#      type       : 容器/材料类型，如 "beaker" / "烧杯" / 1
+#      anomaly    : 异常类型（可带小类，用 "/" 分隔），如 "stain/water_stain" / "污渍/水渍" / "1"
+#      point_view : 点位-视角，如 "magnetic_stirrer_01-001" / "磁力搅拌器1-001"；仅写点位则抓全部视角
+#      sub        : 小类名（消歧用，可留 None），如 "water_stain" / "水渍"
+#      container  : 容器名（material 消歧用，可留 None），如 "liquid_reservoir" / "储液槽"
+#      state      : 材料状态（material 消歧用，可留 None），如 "raw_material" / "原材料"
 ITEMS = [
     {"category": "empty_container", "type": "beaker", "anomaly": "normal",
      "point_view": "magnetic_stirrer_01-001", "sub": None, "container": None, "state": None},
     {"category": "empty_container", "type": "beaker", "anomaly": "normal",
      "point_view": "magnetic_stirrer_01-002", "sub": None, "container": None, "state": None},
-    # 更多条目照上面格式往下加即可，例如：
-    # {"category": "empty_container", "type": "beaker", "anomaly": "stain/water_stain",
-    #  "point_view": "beaker_sample_carousel-001", "sub": "water_stain", "container": None, "state": None},
-    # {"category": "material", "type": "polyvinyl_alcohol", "anomaly": "normal",
-    #  "point_view": "magnetic_stirrer_01-001", "sub": None, "container": "liquid_reservoir", "state": None},
+    # 更多条目照上面格式往下加即可，三个写法均可混用，例如：
+    # {"category": "empty_container", "type": "烧杯", "anomaly": "正常",
+    #  "point_view": "磁力搅拌器1-001", "sub": None, "container": None, "state": None},
+    # {"category": "empty_container", "type": "烧杯", "anomaly": "污渍/水渍",
+    #  "point_view": "烧杯样品盘-001", "sub": "水渍", "container": None, "state": None},
+    # {"category": "material", "type": "聚乙烯醇", "anomaly": "正常",
+    #  "point_view": "磁力搅拌器1-001", "sub": None, "container": "储液槽", "state": "原材料"},
 ]
 
 # 3) 数据集根目录（留 None 则按 category 自动从 path_config_standard.py / path_config_material.py 读取）
@@ -96,21 +109,182 @@ def log(msg: str) -> None:
 # --------------------------------------------------------------------------
 # 数据集根目录推断
 # --------------------------------------------------------------------------
-def get_root_from_config(category: str):
+def load_config(category: str):
+    """加载 path_config_*.py，返回 (cfg_module, root)。
+    即使 --dataset-root 覆盖了 root，cfg_module 仍用于中文/编号 -> 英文 的转义。
+    """
     mod_name = {
         "empty_container": "path_config_standard",
         "material": "path_config_material",
     }.get(category)
     if not mod_name:
-        return None
+        return None, None
     try:
         if str(PARENT_DIR) not in sys.path:
             sys.path.insert(0, str(PARENT_DIR))
         mod = importlib.import_module(mod_name)
-        return Path(mod.DATASET_ROOT)
+        return mod, Path(mod.DATASET_ROOT)
     except Exception as exc:  # noqa: BLE001
-        log(f"[警告] 无法从配置模块 {mod_name} 读取 DATASET_ROOT: {exc}")
-        return None
+        log(f"[警告] 无法从配置模块 {mod_name} 读取 DATASET_ROOT / 对照表: {exc}")
+        return None, None
+
+
+# --------------------------------------------------------------------------
+# 中文 / 编号 -> 英文路径名 自动转义（基于 path_config_*.py 的 *_CN 对照表）
+# --------------------------------------------------------------------------
+class PathTranslator:
+    """把用户可能用中文或编号填写的字段，转义成磁盘上的真实英文目录名。
+    - 已是英文：原样返回
+    - 中文：按 *_CN 对照表映射（如 '烧杯' -> 'beaker'）
+    - 数字编号：按 ANOMALY_TYPES/CONTAINERS/... 的 int->en 映射
+    未命中对照表时保留原样并给出警告。
+    """
+
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.is_material = bool(getattr(cfg, "USES_MATERIAL_HIERARCHY", False))
+        self._maps = {}
+
+        if self.is_material:
+            self._maps["type"] = self._build_flat(cfg, "MATERIALS", "MATERIALS_CN")
+            self._maps["anomaly"] = self._build_int(cfg, "ANOMALY_TYPES", "ANOMALY_TYPES_CN")
+            self._maps["container"] = self._build_int(cfg, "CONTAINERS", "CONTAINERS_CN")
+            self._maps["state"] = self._build_int(cfg, "MATERIAL_STATES", "MATERIAL_STATES_CN")
+            self._maps["sub"] = None
+        else:
+            self._maps["type"] = self._build_int(cfg, "CONTAINERS", "CONTAINERS_CN")
+            a_cn, a_en, a_int = self._build_int(cfg, "ANOMALY_TYPES", "ANOMALY_TYPES_CN")
+            s_cn, s_en, _ = self._build_sub(cfg)
+            # 异常字段同时接受“一级异常”和“小类”的中文（如 污渍 / 水渍）
+            self._maps["anomaly"] = ({**a_cn, **s_cn}, a_en | s_en, a_int)
+            self._maps["sub"] = (s_cn, s_en, None)
+            self._maps["container"] = None
+            self._maps["state"] = None
+
+        # 拍摄点位（两个配置都有 SHOOTING_POINTS / SHOOTING_POINTS_CN）
+        sp_cn = dict(getattr(cfg, "SHOOTING_POINTS_CN", {}))
+        sp_en = set(getattr(cfg, "SHOOTING_POINTS", {}).keys())
+        self._maps["point"] = (sp_cn, sp_en, None)
+
+        # 材料编号是“按状态分层”的：编号 1 在不同状态下对应不同材料。
+        # 记录 state_id -> {材料编号: 英文名} 与 英文名 -> state_id，用于状态感知解析。
+        self.material_by_state = getattr(cfg, "MATERIALS", {})
+        self.state_en_to_id = {en: sid for sid, en in getattr(cfg, "MATERIAL_STATES", {}).items()}
+
+    @staticmethod
+    def _build_int(cfg, en_name, cn_name):
+        en_map = dict(getattr(cfg, en_name, {}))
+        cn_map = dict(getattr(cfg, cn_name, {}))
+        cn_to_en = {cn: en_map[i] for i, cn in cn_map.items() if i in en_map}
+        en_set = set(en_map.values())
+        int_to_en = dict(en_map)
+        return (cn_to_en, en_set, int_to_en)
+
+    @staticmethod
+    def _build_flat(cfg, en_name, cn_name):
+        en_map = getattr(cfg, en_name, {})   # state -> {id: en}
+        cn_map = getattr(cfg, cn_name, {})   # state -> {id: cn}
+        cn_to_en, en_set, int_to_en = {}, set(), {}
+        for state_id, d in en_map.items():
+            for mid, en in d.items():
+                en_set.add(en)
+                int_to_en[mid] = en
+        for state_id, d in cn_map.items():
+            base = en_map.get(state_id, {})
+            for mid, cn in d.items():
+                if mid in base:
+                    cn_to_en[cn] = base[mid]
+        return (cn_to_en, en_set, int_to_en)
+
+    @staticmethod
+    def _build_sub(cfg):
+        # ANOMALY_SUBCATEGORIES_CN 是 en->cn
+        en_to_cn = dict(getattr(cfg, "ANOMALY_SUBCATEGORIES_CN", {}))
+        cn_to_en = {cn: en for en, cn in en_to_cn.items()}
+        en_set = set(en_to_cn.keys())
+        return (cn_to_en, en_set, None)
+
+    def _translate(self, field, value):
+        if value is None:
+            return None
+        v = value.strip()
+        if v == "" or v == "-":
+            return ""
+        mapping = self._maps.get(field)
+        if mapping is None:
+            return v
+        cn_to_en, en_set, int_to_en = mapping
+        if en_set and v.lower() in en_set:
+            return v  # 已是英文
+        if v in cn_to_en:
+            log(f"[转义] {field}: '{v}' -> '{cn_to_en[v]}'")
+            return cn_to_en[v]
+        if int_to_en is not None and v.isdigit() and int(v) in int_to_en:
+            log(f"[转义] {field}: #{v} -> '{int_to_en[int(v)]}'")
+            return int_to_en[int(v)]
+        log(f"[警告] {field}: '{v}' 未匹配到英文路径名，按原样使用（可能匹配失败）")
+        return v
+
+    def anomaly(self, v):
+        """异常可能带小类（如 '污渍/水渍'），逐段转义后重新用 '/' 连接。"""
+        if v is None:
+            return None
+        parts = [p.strip() for p in re.split(r"[/,;]", v) if p.strip()]
+        if not parts:
+            return v
+        return "/".join(self._translate("anomaly", p) for p in parts)
+
+    def point_view(self, pv):
+        pv = (pv or "").strip()
+        if "-" in pv:
+            point, _, view = pv.rpartition("-")
+        else:
+            point, view = pv, ""
+        en_point = self._translate("point", point)
+        return f"{en_point}-{view}" if view else en_point
+
+    def type(self, v, state_id=None):
+        """材料名称字段（material 的 type）。
+        - 数字编号：优先按“当前状态”的 MATERIALS[state][编号] 解析（状态感知，避免同名编号误判）；
+          未给 state 时退化为跨状态扁平映射并提示。
+        - 中文/英文：按 *_CN / 原样透传。
+        """
+        if v is None:
+            return None
+        vv = v.strip()
+        if vv == "" or vv == "-":
+            return ""
+        if self.is_material and vv.isdigit():
+            mid = int(vv)
+            if state_id is not None:
+                by_state = self.material_by_state.get(state_id, {})
+                if mid in by_state:
+                    en = by_state[mid]
+                    log(f"[转义] type: #{vv} (state={state_id}) -> '{en}'")
+                    return en
+                log(f"[警告] type: 材料编号 {vv} 不在状态 {state_id} 的材料列表中，按原样使用")
+                return vv
+            # 无 state 上下文：用跨状态扁平映射（可能非唯一，提示用户补充 state）
+            flat = self._maps["type"][2]  # (cn_to_en, en_set, int_to_en)[2]
+            if mid in flat:
+                en = flat[mid]
+                log(f"[警告] type: 材料编号 {vv} 缺少 state，按扁平映射 -> '{en}'（若有歧义请补充 state）")
+                return en
+            log(f"[警告] type: 材料编号 {vv} 未匹配，按原样使用")
+            return vv
+        return self._translate("type", v)
+
+    def state_id_of(self, state_en):
+        """英文名/编号 反查 state_id；未知返回 None。"""
+        if not state_en:
+            return None
+        if state_en.isdigit() and int(state_en) in self.state_en_to_id.values():
+            return int(state_en)
+        return self.state_en_to_id.get(state_en)
+
+    def sub(self, v):       return self._translate("sub", v)
+    def container(self, v): return self._translate("container", v)
+    def state(self, v):     return self._translate("state", v)
 
 
 # --------------------------------------------------------------------------
@@ -314,19 +488,29 @@ def main():
     no_zip = args.no_zip or NO_ZIP
     dry_run = args.dry_run or DRY_RUN
 
-    # 4) 解析每个条目 -> 视角目录 + 图片
+    # 4) 解析每个条目 -> 视角目录 + 图片（含中文/编号 -> 英文 自动转义）
     plan = []
     for cat, typ, ano, pv, sub, cont, st in items:
-        if root_override:
-            root = Path(root_override)
-        else:
-            root = get_root_from_config(cat)
+        cfg, cfg_root = load_config(cat)
+        root = Path(root_override) if root_override else cfg_root
         if root is None:
             log(f"[错误] 无法确定数据集根目录 (category={cat})，请用参数或脚本 DATASET_ROOT 指定")
             return 2
         if not root.is_dir():
             log(f"[错误] 数据集根目录不存在: {root}")
             return 2
+        # 中文 / 编号 -> 英文文件夹名
+        if cfg is not None:
+            tr = PathTranslator(cfg)
+            # 先解析 state（material 的 type 编号需要 state 上下文才能确定唯一材料）
+            st_en = tr.state(st) or None
+            st_id = tr.state_id_of(st_en)
+            typ = tr.type(typ, state_id=st_id)
+            ano = tr.anomaly(ano)
+            sub = tr.sub(sub) or None
+            cont = tr.container(cont) or None
+            st = st_en
+            pv = tr.point_view(pv)
         required = split_multi(ano) + [typ]
         if sub:
             required += split_multi(sub)
