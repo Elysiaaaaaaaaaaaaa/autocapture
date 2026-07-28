@@ -11,6 +11,7 @@ Usage::
 from __future__ import annotations
 
 import csv
+import json
 import shutil
 import sys
 import threading
@@ -92,6 +93,16 @@ class GrabGui:
         root.title("图片抓取打包工具")
         root.minsize(1050, 780)
 
+        # ── parse --load <path> from CLI ──
+        self._init_load_path: Path | None = None
+        argv = sys.argv[1:]
+        for i, arg in enumerate(argv):
+            if arg == "--load" and i + 1 < len(argv):
+                candidate = Path(argv[i + 1])
+                if candidate.is_file():
+                    self._init_load_path = candidate
+                break
+
         # ── load both configs ──
         self._cfg_empty, self._root_empty = load_config(CATEGORY_EMPTY)
         self._cfg_material, self._root_material = load_config(CATEGORY_MATERIAL)
@@ -144,6 +155,10 @@ class GrabGui:
         self._switch_category(CATEGORY_EMPTY)
 
         root.protocol("WM_DELETE_WINDOW", self._on_close)
+
+        # ── auto-load sequence if --load was given ──
+        if self._init_load_path is not None:
+            self.root.after(100, lambda: self._load_sequence_from_file(self._init_load_path))  # type: ignore[arg-type]
 
     # ── UI construction ────────────────────────────────────────────────
 
@@ -750,17 +765,14 @@ class GrabGui:
         if self._current_images:
             self._show_image(self._current_index + 1)
 
-    def _add_current_image(self) -> None:
-        """Add the currently displayed image to the grab list."""
+    def _build_image_item(self) -> dict | None:
+        """构建当前预览图片的条目字典，无预览时返回 None。"""
         if not self._current_images:
-            messagebox.showwarning("无图片", "请先选择参数匹配到图片后再添加。")
-            return
-
+            return None
         path = self._current_images[self._current_index]
         dir_name = path.parent.name
         category = CATEGORY_MATERIAL if self._material_mode else CATEGORY_EMPTY
 
-        # Extract human-readable anomaly and material/container type
         ano_display = ""
         type_display = ""
         if self._anomaly_var:
@@ -775,21 +787,54 @@ class GrabGui:
                 cont_text = self._container_var.get()
                 type_display = cont_text.split(":", 1)[-1].strip() if ":" in cont_text else cont_text
 
-        self._image_list.append(
-            {
-                "path": path,
-                "dir_name": dir_name,
-                "category": category,
-                "anomaly": ano_display,
-                "type_info": type_display,
-            }
-        )
+        return {
+            "path": path,
+            "dir_name": dir_name,
+            "category": category,
+            "anomaly": ano_display,
+            "type_info": type_display,
+        }
+
+    def _add_current_image(self) -> None:
+        """Add the currently displayed image to the end of the grab list."""
+        item = self._build_image_item()
+        if item is None:
+            messagebox.showwarning("无图片", "请先选择参数匹配到图片后再添加。")
+            return
+
+        self._image_list.append(item)
         self._refresh_treeview()
         self._pack_btn["state"] = tk.NORMAL
         self._log(
-            f"已添加: {path.name}  "
-            f"异常={ano_display}  "
-            f"类型={type_display}"
+            f"已添加: {item['path'].name}  "
+            f"异常={item['anomaly']}  "
+            f"类型={item['type_info']}"
+        )
+
+    def _on_insert_after(self) -> None:
+        """在当前选中的条目下方插入一张图片；未选中则追加到末尾。"""
+        item = self._build_image_item()
+        if item is None:
+            messagebox.showwarning("无图片", "请先选择参数匹配到图片后再添加。")
+            return
+
+        selected = self._tree.selection()
+        if selected:
+            insert_idx = self._tree.index(selected[0]) + 1
+        else:
+            insert_idx = len(self._image_list)
+
+        self._image_list.insert(insert_idx, item)
+        self._refresh_treeview()
+        self._pack_btn["state"] = tk.NORMAL
+        # 选中新插入的行
+        children = self._tree.get_children()
+        if insert_idx < len(children):
+            self._tree.selection_set(children[insert_idx])
+        self._log(
+            f"已插入 (#{insert_idx + 1}): {item['path'].name}  "
+            f"异常={item['anomaly']}  "
+            f"类型={item['type_info']}"
         )
 
     # ── image list ──────────────────────────────────────────────────────
@@ -826,7 +871,10 @@ class GrabGui:
             side=tk.LEFT, padx=(0, 4)
         )
         ttk.Button(btn_row, text="↓ 下移", command=self._on_move_down).pack(
-            side=tk.LEFT
+            side=tk.LEFT, padx=(0, 4)
+        )
+        ttk.Button(btn_row, text="▼ 插入到选中下方", command=self._on_insert_after).pack(
+            side=tk.LEFT, padx=(0, 4)
         )
         self._list_count_var = tk.StringVar(value="共 0 张")
         ttk.Label(btn_row, textvariable=self._list_count_var).pack(
@@ -942,6 +990,89 @@ class GrabGui:
         if d:
             self._out_dir_var.set(d)
 
+    # ── sequence load / save ────────────────────────────────────────────
+
+    def _on_load_sequence(self) -> None:
+        """弹出文件对话框，加载 JSON 或 CSV 序列文件。"""
+        path_str = filedialog.askopenfilename(
+            title="加载序列文件",
+            filetypes=[
+                ("序列文件", "*.json *.csv"),
+                ("JSON 文件", "*.json"),
+                ("CSV 文件", "*.csv"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if not path_str:
+            return
+        self._load_sequence_from_file(Path(path_str))
+
+    def _load_sequence_from_file(self, file_path: Path) -> None:
+        """从 JSON 或 CSV 文件加载图片序列到列表中。"""
+        if not file_path.is_file():
+            messagebox.showwarning("文件不存在", f"序列文件不存在:\n{file_path}")
+            return
+
+        items_data: list[dict] = []
+        desc = ""
+        try:
+            raw = file_path.read_text(encoding="utf-8")
+            if file_path.suffix.lower() == ".json":
+                data = json.loads(raw)
+                desc = data.get("description", "")
+                items_data = data.get("items", [])
+            elif file_path.suffix.lower() == ".csv":
+                import io
+                reader = csv.DictReader(io.StringIO(raw))
+                for row in reader:
+                    items_data.append({
+                        "source": row.get("source", ""),
+                        "dir_name": row.get("dir_name", ""),
+                        "category": row.get("category", ""),
+                        "anomaly": row.get("anomaly", ""),
+                        "type_info": row.get("type_info", ""),
+                    })
+            else:
+                messagebox.showwarning("不支持的格式", f"请选择 .json 或 .csv 文件。")
+                return
+        except Exception as exc:
+            messagebox.showerror("加载失败", f"无法解析序列文件:\n{exc}")
+            return
+
+        if not items_data:
+            messagebox.showwarning("空序列", "序列文件中没有条目。")
+            return
+
+        loaded = 0
+        skipped = 0
+        for item_data in items_data:
+            src_str = item_data.get("source", "")
+            src = Path(src_str) if src_str else None
+            if src is None or not src.is_file():
+                skipped += 1
+                self._log(f"  ⚠ 文件不存在，跳过: {src}")
+                continue
+            self._image_list.append({
+                "path": src,
+                "dir_name": item_data.get("dir_name", src.parent.name),
+                "category": item_data.get("category", ""),
+                "anomaly": item_data.get("anomaly", ""),
+                "type_info": item_data.get("type_info", ""),
+            })
+            loaded += 1
+
+        if desc:
+            self._desc_text.delete("1.0", tk.END)
+            self._desc_text.insert(tk.END, desc)
+
+        self._refresh_treeview()
+        if self._image_list:
+            self._pack_btn["state"] = tk.NORMAL
+        self._log(
+            f"已加载序列: {file_path.name} "
+            f"(成功 {loaded} 张, 跳过 {skipped} 张)"
+        )
+
     # ── action section ──────────────────────────────────────────────────
 
     def _build_action_section(self, parent: ttk.Frame) -> None:
@@ -953,7 +1084,12 @@ class GrabGui:
             command=self._on_pack,
             state=tk.DISABLED,
         )
-        self._pack_btn.pack(side=tk.LEFT)
+        self._pack_btn.pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(
+            frame,
+            text="📂 加载序列",
+            command=self._on_load_sequence,
+        ).pack(side=tk.LEFT, padx=(0, 8))
 
     # ── log section ─────────────────────────────────────────────────────
 
@@ -1155,6 +1291,26 @@ class GrabGui:
                 writer.writeheader()
                 writer.writerows(manifest_rows)
             self.root.after(0, self._log, f"已写入清单: {csv_path.name}")
+
+            # sequence.json
+            seq_path = out_dir / "sequence.json"
+            seq_data = {
+                "description": desc,
+                "created": datetime.now().isoformat(),
+                "items": [
+                    {
+                        "source": r["source"],
+                        "dir_name": r.get("dir_name", ""),
+                        "category": r.get("category", ""),
+                        "anomaly": r.get("anomaly", ""),
+                        "type_info": r.get("type_info", ""),
+                    }
+                    for r in manifest_rows
+                ],
+            }
+            with seq_path.open("w", encoding="utf-8") as fh:
+                json.dump(seq_data, fh, ensure_ascii=False, indent=2)
+            self.root.after(0, self._log, f"已写入序列: {seq_path.name}")
 
             # Zip
             self.root.after(0, self._log, "正在打包压缩包...")
