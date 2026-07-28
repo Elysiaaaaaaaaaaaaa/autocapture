@@ -353,31 +353,6 @@ def view_number_of(leaf_name: str):
     return None
 
 
-def point_name_of(leaf_name: str) -> str:
-    """从 leaf 目录名提取点位名。
-    e.g., 'magnetic_stirrer_01-001' -> 'magnetic_stirrer_01'
-          'analytical_balance-002' -> 'analytical_balance'
-    """
-    vn = view_number_of(leaf_name)
-    if vn is not None:
-        return leaf_name.rsplit("-", 1)[0]
-    return leaf_name
-
-
-def point_number_of(point_name: str, point_map: dict, counter: list[int]) -> int:
-    """返回点位的数字编号——优先用名称末尾数字，否则按出现顺序分配。
-    e.g., 'magnetic_stirrer_01' -> 1, 'analytical_balance' -> 自动分配
-    """
-    if point_name not in point_map:
-        m = re.search(r"(\d+)$", point_name)
-        if m:
-            point_map[point_name] = int(m.group(1))
-        else:
-            counter[0] += 1
-            point_map[point_name] = counter[0]
-    return point_map[point_name]
-
-
 def resolve_dirs(root: Path, point_view: str, required):
     """返回匹配到的视角目录列表（按其视角编号排序）。"""
     point_view = point_view.strip()
@@ -594,24 +569,35 @@ def main():
         out_dir.mkdir(parents=True, exist_ok=True)
 
     # 6) 复制 + 重命名
+    # 命名规则：<步骤数>-<视角编号>.ext
+    #   步骤数：顺序计数器，仅当"路径直到点位文件夹 '-' 之前"与上一张不同时才 +1
+    #   视角编号：直接从目录名末尾提取（如 -001 → 001）
     used = set()
     manifest_rows = []
-    point_map: dict[str, int] = {}
-    point_counter = [0]  # list 用于闭包内可变
+    prev_step_key: str | None = None
+    step_num = 0
     for cat, typ, ano, pv, d, imgs in plan:
         vn = view_number_of(d.name)
-        point_name = point_name_of(d.name)
-        pn = point_number_of(point_name, point_map, point_counter)
+        # 构建步骤键：完整父目录 + 点位名（不含视角编号）
+        if vn is not None:
+            step_key = str(d.parent / d.name.rsplit("-", 1)[0])
+        else:
+            step_key = str(d)
+
+        if prev_step_key is None or step_key != prev_step_key:
+            step_num += 1
+            prev_step_key = step_key
+
         idx = 1
         for img in imgs:
             ext = img.suffix.lower()
             if vn is not None:
                 if len(imgs) > 1:
-                    base = safe_name(f"{pn:02d}-{vn:03d}-{idx:03d}{ext}", used, hint=d.name)
+                    base = safe_name(f"{step_num:02d}-{vn:03d}-{idx:03d}{ext}", used, hint=d.name)
                 else:
-                    base = safe_name(f"{pn:02d}-{vn:03d}{ext}", used, hint=d.name)
+                    base = safe_name(f"{step_num:02d}-{vn:03d}{ext}", used, hint=d.name)
             else:
-                base = safe_name(f"{pn:02d}-{idx:03d}{ext}", used, hint=d.name)
+                base = safe_name(f"{step_num:02d}-{idx:03d}{ext}", used, hint=d.name)
             dest = out_dir / base
             if dry_run:
                 log(f"[DRY-RUN] {img}  ->  {dest}")
@@ -625,7 +611,7 @@ def main():
                 "type": typ,
                 "anomaly": ano,
                 "point_view": pv,
-                "view_prefix": f"{pn:02d}-{vn:03d}" if vn is not None else f"{pn:02d}",
+                "view_prefix": f"{step_num:02d}-{vn:03d}" if vn is not None else f"{step_num:02d}",
             })
             idx += 1
 

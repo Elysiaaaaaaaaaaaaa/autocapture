@@ -41,8 +41,6 @@ from grab_photos.grab import (  # noqa: E402
     PathTranslator,
     collect_images,
     load_config,
-    point_name_of,
-    point_number_of,
     resolve_dirs,
     split_multi,
     view_number_of,
@@ -1062,8 +1060,8 @@ class GrabGui:
 
             manifest_rows: list[dict] = []
             used_names: set[str] = set()
-            point_map: dict[str, int] = {}
-            point_counter = [0]
+            prev_step_key: str | None = None
+            step_num = 0
 
             for idx, item in enumerate(items, 1):
                 src = item["path"]
@@ -1073,17 +1071,25 @@ class GrabGui:
 
                 dn = item.get("dir_name", "")
                 vn = view_number_of(dn)
-                point_name = point_name_of(dn)
-                pn = point_number_of(point_name, point_map, point_counter)
+                # 步骤键：完整父目录 + 点位名（不含视角编号后缀）
+                # 用于判断是否与上一张图片属于同一点位
+                if vn is not None:
+                    step_key = str(src.parent.parent / dn.rsplit("-", 1)[0])
+                else:
+                    step_key = str(src.parent)
+
+                if prev_step_key is None or step_key != prev_step_key:
+                    step_num += 1
+                    prev_step_key = step_key
 
                 ext = src.suffix.lower()
                 if ext not in IMAGE_EXTS:
                     ext = src.suffix or ".png"
 
                 if vn is not None:
-                    dest_name = f"{pn:02d}-{vn:03d}{ext}"
+                    dest_name = f"{step_num:02d}-{vn:03d}{ext}"
                 else:
-                    dest_name = f"{pn:02d}{ext}"
+                    dest_name = f"{step_num:02d}{ext}"
 
                 # Collision safety
                 if dest_name in used_names:
