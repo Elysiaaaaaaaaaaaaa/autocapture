@@ -45,7 +45,31 @@
 # ==========================================================================
 
 # 1) 文本说明（会保存为 output/description.txt）
-DESCRIPTION = """烧杯正常样本，磁力搅拌器1双视角。
+DESCRIPTION = """
+1.天平上的干净烧杯
+2.向烧杯中加入聚乙烯醇粉末
+3.聚乙烯醇烧杯转移到移液站
+4.向聚乙烯醇烧杯中加入去离子水
+5.聚乙烯醇烧杯转移到磁力搅拌器
+6.加入搅拌子后定时10分钟搅拌
+7.观察到未溶解，增加10分钟搅拌
+8.已完全溶解
+9.聚乙烯醇烧杯转移到移液站备用
+----
+10.在天平上准备另一个干净烧杯
+11.烧杯中加入过硫酸铵粉末
+12.过硫酸铵烧杯转移到移液站
+13.向过硫酸铵烧杯中加入去离子水
+14.过硫酸铵烧杯转移到磁力搅拌器
+15.加入搅拌子后定时10分钟搅拌
+16.观察到未溶解，增加10分钟搅拌
+17.已完全溶解
+18.过硫酸铵烧杯转移到移液站备用
+----
+19.移液站上准备好装有pedot:pss的储液槽
+20.移液站上准备好六孔板
+21.使用聚乙烯醇溶液、过硫酸铵溶液、pedot:pss溶液依次加入六孔板中
+22.静置24小时，得到凝胶
 """
 
 # 2) 图片序列：每行一个条目。顺序即抓取顺序。
@@ -59,16 +83,18 @@ DESCRIPTION = """烧杯正常样本，磁力搅拌器1双视角。
 #      state      : 材料状态（material 消歧用，可留 None），如 "raw_material" / "原材料"
 ITEMS = [
     {"category": "empty_container", "type": "beaker", "anomaly": "normal",
-     "point_view": "magnetic_stirrer_01-001", "sub": None, "container": None, "state": None},
+     "point_view": "analytical_balance-001", "sub": None, "container": None, "state": None},
     {"category": "empty_container", "type": "beaker", "anomaly": "normal",
-     "point_view": "magnetic_stirrer_01-002", "sub": None, "container": None, "state": None},
-    # 更多条目照上面格式往下加即可，三个写法均可混用，例如：
-    # {"category": "empty_container", "type": "烧杯", "anomaly": "正常",
-    #  "point_view": "磁力搅拌器1-001", "sub": None, "container": None, "state": None},
-    # {"category": "empty_container", "type": "烧杯", "anomaly": "污渍/水渍",
-    #  "point_view": "烧杯样品盘-001", "sub": "水渍", "container": None, "state": None},
-    # {"category": "material", "type": "聚乙烯醇", "anomaly": "正常",
-    #  "point_view": "磁力搅拌器1-001", "sub": None, "container": "储液槽", "state": "原材料"},
+     "point_view": "analytical_balance-002", "sub": None, "container": None, "state": None},
+    {"category": "material", "type": "beaker", "anomaly": "normal",
+     "point_view": "analytical_balance-002", "sub": None, "container": None, "state": None},
+    {"category": "empty_container", "type": "beaker", "anomaly": "normal",
+     "point_view": "analytical_balance-002", "sub": None, "container": None, "state": None}, 
+    # 更多条目照上面格式往下加即可，例如：
+    # {"category": "empty_container", "type": "beaker", "anomaly": "stain/water_stain",
+    #  "point_view": "beaker_sample_carousel-001", "sub": "water_stain", "container": None, "state": None},
+    # {"category": "material", "type": "polyvinyl_alcohol", "anomaly": "normal",
+    #  "point_view": "magnetic_stirrer_01-001", "sub": None, "container": "liquid_reservoir", "state": None},
 ]
 
 # 3) 数据集根目录（留 None 则按 category 自动从 path_config_standard.py / path_config_material.py 读取）
