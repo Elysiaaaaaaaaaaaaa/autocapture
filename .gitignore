@@ -5,3 +5,4 @@ node_modules
 table-generator/
 outputs/
 .plan/
+.workbuddy/
