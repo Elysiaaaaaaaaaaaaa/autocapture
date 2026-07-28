@@ -353,6 +353,31 @@ def view_number_of(leaf_name: str):
     return None
 
 
+def point_name_of(leaf_name: str) -> str:
+    """从 leaf 目录名提取点位名。
+    e.g., 'magnetic_stirrer_01-001' -> 'magnetic_stirrer_01'
+          'analytical_balance-002' -> 'analytical_balance'
+    """
+    vn = view_number_of(leaf_name)
+    if vn is not None:
+        return leaf_name.rsplit("-", 1)[0]
+    return leaf_name
+
+
+def point_number_of(point_name: str, point_map: dict, counter: list[int]) -> int:
+    """返回点位的数字编号——优先用名称末尾数字，否则按出现顺序分配。
+    e.g., 'magnetic_stirrer_01' -> 1, 'analytical_balance' -> 自动分配
+    """
+    if point_name not in point_map:
+        m = re.search(r"(\d+)$", point_name)
+        if m:
+            point_map[point_name] = int(m.group(1))
+        else:
+            counter[0] += 1
+            point_map[point_name] = counter[0]
+    return point_map[point_name]
+
+
 def resolve_dirs(root: Path, point_view: str, required):
     """返回匹配到的视角目录列表（按其视角编号排序）。"""
     point_view = point_view.strip()
@@ -537,9 +562,13 @@ def main():
             cont = tr.container(cont) or None
             st = st_en
             pv = tr.point_view(pv)
-        required = split_multi(ano) + [typ]
-        if sub:
-            required += split_multi(sub)
+        # gel / solution 状态下没有异常类型目录层级，不按 anomaly 过滤
+        if cat == "material" and st and st.lower() in ("gel", "solution"):
+            required = [typ]  # 仅按材料名匹配
+        else:
+            required = split_multi(ano) + [typ]
+            if sub:
+                required += split_multi(sub)
         if cont:
             required.append(cont)
         if st:
@@ -567,13 +596,22 @@ def main():
     # 6) 复制 + 重命名
     used = set()
     manifest_rows = []
+    point_map: dict[str, int] = {}
+    point_counter = [0]  # list 用于闭包内可变
     for cat, typ, ano, pv, d, imgs in plan:
         vn = view_number_of(d.name)
-        prefix = f"{vn:02d}" if vn is not None else "00"
+        point_name = point_name_of(d.name)
+        pn = point_number_of(point_name, point_map, point_counter)
         idx = 1
         for img in imgs:
             ext = img.suffix.lower()
-            base = safe_name(f"{prefix}-{idx:03d}{ext}", used, hint=d.name)
+            if vn is not None:
+                if len(imgs) > 1:
+                    base = safe_name(f"{pn:02d}-{vn:03d}-{idx:03d}{ext}", used, hint=d.name)
+                else:
+                    base = safe_name(f"{pn:02d}-{vn:03d}{ext}", used, hint=d.name)
+            else:
+                base = safe_name(f"{pn:02d}-{idx:03d}{ext}", used, hint=d.name)
             dest = out_dir / base
             if dry_run:
                 log(f"[DRY-RUN] {img}  ->  {dest}")
@@ -587,7 +625,7 @@ def main():
                 "type": typ,
                 "anomaly": ano,
                 "point_view": pv,
-                "view_prefix": prefix,
+                "view_prefix": f"{pn:02d}-{vn:03d}" if vn is not None else f"{pn:02d}",
             })
             idx += 1
 

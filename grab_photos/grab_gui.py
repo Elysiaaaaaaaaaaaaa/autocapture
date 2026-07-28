@@ -41,6 +41,8 @@ from grab_photos.grab import (  # noqa: E402
     PathTranslator,
     collect_images,
     load_config,
+    point_name_of,
+    point_number_of,
     resolve_dirs,
     split_multi,
     view_number_of,
@@ -468,17 +470,26 @@ class GrabGui:
             cfg.MATERIALS_CN[sid],
             _extract_id((self._material_var or tk.StringVar()).get()),
         )
-        anomaly_ids = (
-            cfg.get_anomaly_types(sid)
-            if hasattr(cfg, "get_anomaly_types")
-            else sorted(cfg.ANOMALY_TYPES)
-        )
-        _set_combo_options(
-            self._anomaly_cb,  # type: ignore[arg-type]
-            self._anomaly_var,  # type: ignore[arg-type]
-            {a: cfg.ANOMALY_TYPES_CN[a] for a in anomaly_ids},
-            _extract_id((self._anomaly_var or tk.StringVar()).get()),
-        )
+
+        # gel (3) / solution (2) 状态下没有异常类型目录，禁用异常选择
+        state_en = cfg.MATERIAL_STATES.get(sid, "")
+        if state_en.lower() in ("gel", "solution"):
+            self._anomaly_cb["state"] = tk.DISABLED  # type: ignore[index]
+            self._anomaly_var.set("—")  # type: ignore[union-attr]
+            self._anomaly_cb["values"] = ["—"]  # type: ignore[index]
+        else:
+            self._anomaly_cb["state"] = "readonly"  # type: ignore[index]
+            anomaly_ids = (
+                cfg.get_anomaly_types(sid)
+                if hasattr(cfg, "get_anomaly_types")
+                else sorted(cfg.ANOMALY_TYPES)
+            )
+            _set_combo_options(
+                self._anomaly_cb,  # type: ignore[arg-type]
+                self._anomaly_var,  # type: ignore[arg-type]
+                {a: cfg.ANOMALY_TYPES_CN[a] for a in anomaly_ids},
+                _extract_id((self._anomaly_var or tk.StringVar()).get()),
+            )
         container_ids = (
             cfg.get_containers(sid)
             if hasattr(cfg, "get_containers")
@@ -545,7 +556,11 @@ class GrabGui:
             state_text = (self._state_var or tk.StringVar()).get().strip()
             state_id = _extract_id(state_text)
             state_en = cfg.MATERIAL_STATES.get(state_id or 0, state_text) if state_id else state_text
-            return split_multi(ano_en) + [mat_en_str, cont_en, state_en]
+            # gel / solution 没有异常类型目录层级，不按 anomaly 过滤
+            if state_en.lower() in ("gel", "solution"):
+                return [mat_en_str, state_en]
+            else:
+                return split_multi(ano_en) + [mat_en_str, cont_en, state_en]
         else:
             ano_text = (self._anomaly_var or tk.StringVar()).get().strip()
             ano_id = _extract_id(ano_text)
@@ -747,12 +762,37 @@ class GrabGui:
         dir_name = path.parent.name
         category = CATEGORY_MATERIAL if self._material_mode else CATEGORY_EMPTY
 
+        # Extract human-readable anomaly and material/container type
+        ano_display = ""
+        type_display = ""
+        if self._anomaly_var:
+            ano_text = self._anomaly_var.get()
+            ano_display = ano_text.split(":", 1)[-1].strip() if ":" in ano_text else ano_text
+        if self._material_mode:
+            if self._material_var:
+                mat_text = self._material_var.get()
+                type_display = mat_text.split(":", 1)[-1].strip() if ":" in mat_text else mat_text
+        else:
+            if self._container_var:
+                cont_text = self._container_var.get()
+                type_display = cont_text.split(":", 1)[-1].strip() if ":" in cont_text else cont_text
+
         self._image_list.append(
-            {"path": path, "dir_name": dir_name, "category": category}
+            {
+                "path": path,
+                "dir_name": dir_name,
+                "category": category,
+                "anomaly": ano_display,
+                "type_info": type_display,
+            }
         )
         self._refresh_treeview()
         self._pack_btn["state"] = tk.NORMAL
-        self._log(f"已添加: {path.name}  ({dir_name})")
+        self._log(
+            f"已添加: {path.name}  "
+            f"异常={ano_display}  "
+            f"类型={type_display}"
+        )
 
     # ── image list ──────────────────────────────────────────────────────
 
@@ -760,16 +800,16 @@ class GrabGui:
         frame = ttk.LabelFrame(parent, text="已选图片列表", padding=4)
         frame.pack(fill=tk.BOTH, expand=False)
 
-        columns = ("idx", "filename", "dir", "source")
+        columns = ("idx", "anomaly", "dir", "type_info")
         self._tree = ttk.Treeview(frame, columns=columns, show="headings", height=6)
         self._tree.heading("idx", text="#")
-        self._tree.heading("filename", text="文件名")
+        self._tree.heading("anomaly", text="异常类型")
         self._tree.heading("dir", text="目录 (点位-视角)")
-        self._tree.heading("source", text="源路径")
+        self._tree.heading("type_info", text="材料类型/容器类型")
         self._tree.column("idx", width=36, anchor=tk.CENTER)
-        self._tree.column("filename", width=180)
-        self._tree.column("dir", width=160)
-        self._tree.column("source", width=300)
+        self._tree.column("anomaly", width=130)
+        self._tree.column("dir", width=180)
+        self._tree.column("type_info", width=150)
 
         vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
@@ -802,7 +842,12 @@ class GrabGui:
             self._tree.insert(
                 "",
                 tk.END,
-                values=(i, item["path"].name, item["dir_name"], str(item["path"])),
+                values=(
+                    i,
+                    item.get("anomaly", ""),
+                    item["dir_name"],
+                    item.get("type_info", ""),
+                ),
             )
         self._list_count_var.set(f"共 {len(self._image_list)} 张")
 
@@ -1017,6 +1062,8 @@ class GrabGui:
 
             manifest_rows: list[dict] = []
             used_names: set[str] = set()
+            point_map: dict[str, int] = {}
+            point_counter = [0]
 
             for idx, item in enumerate(items, 1):
                 src = item["path"]
@@ -1024,18 +1071,35 @@ class GrabGui:
                     self.root.after(0, self._log, f"  ⚠ 文件不存在，跳过: {src}")
                     continue
 
+                dn = item.get("dir_name", "")
+                vn = view_number_of(dn)
+                point_name = point_name_of(dn)
+                pn = point_number_of(point_name, point_map, point_counter)
+
                 ext = src.suffix.lower()
                 if ext not in IMAGE_EXTS:
                     ext = src.suffix or ".png"
-                dest_name = f"{idx:03d}{ext}"
+
+                if vn is not None:
+                    dest_name = f"{pn:02d}-{vn:03d}{ext}"
+                else:
+                    dest_name = f"{pn:02d}{ext}"
 
                 # Collision safety
                 if dest_name in used_names:
-                    stem = f"{idx:03d}"
-                    counter = 2
-                    while f"{stem}_{counter}{ext}" in used_names:
-                        counter += 1
-                    dest_name = f"{stem}_{counter}{ext}"
+                    stem, dot, ext_part = dest_name.rpartition(".")
+                    ext_part = ("." + ext_part) if dot else ""
+                    if dn:
+                        hint_name = f"{stem}__{dn}{ext_part}"
+                    else:
+                        hint_name = f"{stem}_2{ext_part}"
+                    if hint_name not in used_names:
+                        dest_name = hint_name
+                    else:
+                        counter = 2
+                        while f"{stem}_{counter}{ext_part}" in used_names:
+                            counter += 1
+                        dest_name = f"{stem}_{counter}{ext_part}"
                 used_names.add(dest_name)
 
                 dest = out_dir / dest_name
@@ -1047,6 +1111,8 @@ class GrabGui:
                         "source": str(src),
                         "dir_name": item.get("dir_name", ""),
                         "category": item.get("category", ""),
+                        "anomaly": item.get("anomaly", ""),
+                        "type_info": item.get("type_info", ""),
                     }
                 )
                 if idx % 10 == 0 or idx == len(items):
@@ -1078,7 +1144,7 @@ class GrabGui:
             csv_path = out_dir / "manifest.csv"
             with csv_path.open("w", encoding="utf-8", newline="") as fh:
                 writer = csv.DictWriter(
-                    fh, fieldnames=["output", "source", "dir_name", "category"]
+                    fh, fieldnames=["output", "source", "dir_name", "category", "anomaly", "type_info"]
                 )
                 writer.writeheader()
                 writer.writerows(manifest_rows)
