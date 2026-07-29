@@ -353,8 +353,20 @@ def view_number_of(leaf_name: str):
     return None
 
 
-def resolve_dirs(root: Path, point_view: str, required):
-    """返回匹配到的视角目录列表（按其视角编号排序）。"""
+def resolve_dirs(
+    root: Path,
+    point_view: str,
+    required,
+    exclude_ancestor_tokens: set[str] | None = None,
+):
+    """返回匹配到的视角目录列表（按其视角编号排序）。
+
+    Parameters
+    ----------
+    exclude_ancestor_tokens:
+        若提供，则排除祖先目录名中包含任一 token（不区分大小写）的目录。
+        用于 empty_container 模式排除 material 状态目录等场景。
+    """
     point_view = point_view.strip()
     exact = [p for p in root.rglob(point_view) if p.is_dir()]
     if exact:
@@ -368,6 +380,16 @@ def resolve_dirs(root: Path, point_view: str, required):
         d for d in candidates
         if ancestors_satisfy(d.relative_to(root).parts[:-1], required)
     ]
+
+    # Exclude directories whose ancestor path contains any exclude token
+    if exclude_ancestor_tokens:
+        filtered = [
+            d
+            for d in filtered
+            if not exclude_ancestor_tokens
+            & {p.lower() for p in d.relative_to(root).parts[:-1]}
+        ]
+
     # 按视角编号、再按目录名排序，保证 01,02,03... 顺序稳定
     filtered.sort(key=lambda d: (view_number_of(d.name) or 0, d.name))
 

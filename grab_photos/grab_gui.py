@@ -93,15 +93,19 @@ class GrabGui:
         root.title("图片抓取打包工具")
         root.minsize(1050, 780)
 
-        # ── parse --load <path> from CLI ──
+        # ── parse --load <path> and --dataset-root <dir> from CLI ──
         self._init_load_path: Path | None = None
+        self._init_dataset_root: Path | None = None
         argv = sys.argv[1:]
         for i, arg in enumerate(argv):
             if arg == "--load" and i + 1 < len(argv):
                 candidate = Path(argv[i + 1])
                 if candidate.is_file():
                     self._init_load_path = candidate
-                break
+            elif arg == "--dataset-root" and i + 1 < len(argv):
+                candidate = Path(argv[i + 1])
+                if candidate.is_dir():
+                    self._init_dataset_root = candidate
 
         # ── load both configs ──
         self._cfg_empty, self._root_empty = load_config(CATEGORY_EMPTY)
@@ -118,7 +122,11 @@ class GrabGui:
         # Active config (switched via category radiobutton)
         self._cfg = self._cfg_empty or self._cfg_material
         self._material_mode = False
-        self._dataset_root: Path | None = self._root_empty or self._root_material
+        # Use CLI override if provided, otherwise fall back to config defaults
+        if self._init_dataset_root is not None:
+            self._dataset_root: Path | None = self._init_dataset_root
+        else:
+            self._dataset_root = self._root_empty or self._root_material
 
         # ── state ──
         self._current_images: list[Path] = []
@@ -128,6 +136,7 @@ class GrabGui:
         self._imgtk: ImageTk.PhotoImage | None = None
         self._search_after_id: str | None = None
         self._search_gen: int = 0  # generation counter for stale-result detection
+        self._dataset_root_user_set: bool = self._init_dataset_root is not None
 
         # ── param widgets (rebuilt on category switch) ──
         self._param_frame: ttk.Frame | None = None
@@ -209,20 +218,43 @@ class GrabGui:
             command=lambda: self._switch_category(CATEGORY_MATERIAL),
         ).pack(side=tk.LEFT)
 
+        # Dataset root row
+        root_frame = ttk.Frame(frame)
+        root_frame.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(root_frame, text="数据集根目录:").pack(side=tk.LEFT, padx=(0, 4))
+        self._dataset_root_var = tk.StringVar(value=str(self._dataset_root or ""))
+        self._dataset_root_entry = ttk.Entry(
+            root_frame, textvariable=self._dataset_root_var, font=("Consolas", 9)
+        )
+        self._dataset_root_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        ttk.Button(
+            root_frame, text="浏览...", command=self._on_browse_dataset_root
+        ).pack(side=tk.LEFT)
+        self._dataset_root_var.trace_add("write", self._on_dataset_root_change)
+
     def _switch_category(self, category: str) -> None:
         """Rebuild parameter section for *category*."""
         if category == CATEGORY_MATERIAL and self._cfg_material is not None:
             self._cfg = self._cfg_material
             self._material_mode = True
-            self._dataset_root = self._root_material
+            if not self._dataset_root_user_set:
+                self._dataset_root = self._root_material
         else:
             self._cfg = self._cfg_empty or self._cfg_material
             self._material_mode = False
-            self._dataset_root = self._root_empty or self._root_material
+            if not self._dataset_root_user_set:
+                self._dataset_root = self._root_empty or self._root_material
 
         self._cat_var.set(
             CATEGORY_MATERIAL if self._material_mode else CATEGORY_EMPTY
         )
+        # Sync the text field (only if not user-set, keep user's value)
+        if not self._dataset_root_user_set:
+            self._programmatic_root_update = True
+            try:
+                self._dataset_root_var.set(str(self._dataset_root or ""))
+            finally:
+                self._programmatic_root_update = False
 
         # Destroy old param widgets
         for w in self._param_container.winfo_children():
@@ -237,6 +269,37 @@ class GrabGui:
         self._clear_preview()
         self._current_images = []
         self._current_index = 0
+
+    # ── dataset root ────────────────────────────────────────────────────
+
+    def _on_browse_dataset_root(self) -> None:
+        """Open a directory picker and set the dataset root."""
+        d = filedialog.askdirectory(title="选择数据集根目录")
+        if d:
+            self._dataset_root_var.set(d)
+
+    def _on_dataset_root_change(self, *_args) -> None:
+        """Called when the dataset root text field is edited."""
+        # Ignore programmatic updates from _switch_category — only
+        # user-initiated edits (typing or browsing) should lock the root.
+        if getattr(self, "_programmatic_root_update", False):
+            return
+        new_root_str = self._dataset_root_var.get().strip()
+        if new_root_str:
+            new_root = Path(new_root_str)
+            if new_root.is_dir():
+                self._dataset_root = new_root
+                self._dataset_root_user_set = True
+                # Re-trigger path resolution with the new root
+                self._on_path_field_change()
+                return
+        # If empty or invalid, still allow but resolution will show error
+        if new_root_str:
+            self._dataset_root = Path(new_root_str)
+        else:
+            self._dataset_root = None
+        self._dataset_root_user_set = True
+        self._on_path_field_change()
 
     # ── parameter section (standard — empty_container) ─────────────────
 
@@ -608,9 +671,24 @@ class GrabGui:
         self._match_path_var.set("正在搜索...")
         gen = self._search_gen = self._search_gen + 1
 
+        # When in empty_container mode, exclude directories whose ancestor path
+        # contains material state names (raw_material, solution, gel, …).
+        # This prevents matching material-structured directories when both
+        # datasets happen to share a common root.
+        _material_state_names: set[str] = set()
+        if not self._material_mode and self._cfg_material is not None:
+            _material_state_names = set(
+                getattr(self._cfg_material, "MATERIAL_STATES", {}).values()
+            )
+
         def _search() -> None:
             try:
-                dirs = resolve_dirs(root, point_view, required)
+                dirs = resolve_dirs(
+                    root,
+                    point_view,
+                    required,
+                    exclude_ancestor_tokens=_material_state_names or None,
+                )
             except SystemExit:
                 dirs = []
 

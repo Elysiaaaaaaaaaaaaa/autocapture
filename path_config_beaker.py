@@ -1,6 +1,8 @@
 from pathlib import Path
 
-DATASET_ROOT = Path("/home/qy/dataset-202607/quality test/dataset/empty_container")
+from dataset_base import DATASET_BASE
+
+DATASET_ROOT = DATASET_BASE / "empty_container"
 ORBBEC_C1_SERIAL = "CL8K14100H4"
 WARMUP_FRAMES = 15
 
