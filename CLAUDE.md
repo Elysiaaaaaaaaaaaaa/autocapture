@@ -38,6 +38,31 @@ Switch with: `--config path_config_beaker`
   python -m preview_mode.preview_gui --config path_config_standard
   ```
 - `gui.py` — Older basic Tkinter GUI, calls capture scripts as subprocess. Has `Container->Photo` and `Next` buttons but no live preview.
+- `grab_photos/grab_gui.py` — **Image pick & pack GUI**. Select dataset parameters → preview matching images one by one → add to list → pack into zip with manifest/description. Also loads/saves JSON/CSV sequence files.
+  ```
+  python grab_photos/grab_gui.py
+  python grab_photos/grab_gui.py --load grabbed/20250729_120000/sequence.json
+  python grab_photos/grab_gui.py --dataset-root "D:/path/to/dataset"
+  ```
+  Two parameter rows at the bottom of the parameter section:
+  - **配置路径** (configured path) — theoretical path built from selected options, updated instantly on any param change. Does **not** check disk existence. Auto-prepends `empty_container/` or `material/` category directory if the user-set root doesn't already end with it. Applies `:` → `_` sanitization per path segment for Windows compatibility.
+  - **匹配路径** (matched path) — actual filesystem search result (debounced 200ms), showing relative path and image count.
+
+### grab.py — CLI Image Grabber
+
+`grab_photos/grab.py` is the CLI counterpart to `grab_gui.py`. Configure `ITEMS` list at the top of the script, then run:
+
+```
+python grab_photos/grab.py
+python grab_photos/grab.py --dry-run
+python grab_photos/grab.py --manifest items.csv
+```
+
+Key utilities also imported by `grab_gui.py`:
+- `resolve_dirs(root, point_view, required)` — recursive glob for leaf dirs, filtered by ancestor token matching via `part_matches()`
+- `part_matches(req, folder_name)` — loose token match (exact or token-in-folder via `[:_\\s]+` split)
+- `PathTranslator` — Chinese/ID → English path name translation using config `*_CN` mappings
+- `collect_images(view_dir)` — gather image files sorted by numeric tokens in path
 
 ### Analysis & Data Management
 
@@ -57,6 +82,8 @@ Switch with: `--config path_config_beaker`
 
 ## Dataset Directory Structure
 
+### empty_container (path_config_standard)
+
 ```
 <DATASET_ROOT>/
   <container>/                    # e.g. beaker, multiwell_plate_06
@@ -70,6 +97,20 @@ Switch with: `--config path_config_beaker`
 ```
 
 Normal type (anomaly_type=1) has no subcategory level — subcategory arg is `-`.
+
+### material (path_config_material)
+
+```
+<DATASET_ROOT>/
+  <state>/                        # raw_material | solution | gel | original_solution
+    <material_name>/              # e.g. 01_polyvinyl_alcohol, liquid1, gel1
+      [<anomaly_type>/]           # skipped for gel / solution states
+        [<container>/]            # present in ALL states (including gel / solution)
+          <point>-<view>/
+            ...
+```
+
+**⚠️ Config-vs-disk name mismatch**: Config defines material names with colons (e.g. `01:polyvinyl_alcohol`) but Windows directories use underscores (`01_polyvinyl_alcohol`). Both `grab_gui.py` and `grab.py` must normalize `:` → `_` when generating search tokens or displaying paths.
 
 ## CLI Usage
 

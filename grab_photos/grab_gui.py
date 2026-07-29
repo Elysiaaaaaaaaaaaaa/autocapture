@@ -153,6 +153,8 @@ class GrabGui:
         self._point_cb: ttk.Combobox | None = None
         self._state_cb: ttk.Combobox | None = None
         self._material_cb: ttk.Combobox | None = None
+        self._config_path_var: tk.StringVar | None = None
+        self._match_path_var: tk.StringVar | None = None
 
         # ── theme ──
         try:
@@ -361,7 +363,19 @@ class GrabGui:
         ttk.Entry(row2, textvariable=self._view_var, width=10).pack(side=tk.LEFT)
         self._view_var.trace_add("write", self._on_path_field_change)
 
-        # Path preview
+        # Configured path preview (theoretical, regardless of existence)
+        row_cfg = ttk.Frame(parent)
+        row_cfg.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(row_cfg, text="配置路径:", width=10).pack(side=tk.LEFT)
+        self._config_path_var = tk.StringVar(value="(选择参数后显示)")
+        ttk.Entry(
+            row_cfg,
+            textvariable=self._config_path_var,
+            state="readonly",
+            font=("Consolas", 9),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Matched path preview (filesystem search result)
         row3 = ttk.Frame(parent)
         row3.pack(fill=tk.X, pady=(4, 0))
         ttk.Label(row3, text="匹配路径:", width=10).pack(side=tk.LEFT)
@@ -439,7 +453,19 @@ class GrabGui:
         ttk.Entry(row3, textvariable=self._view_var, width=10).pack(side=tk.LEFT)
         self._view_var.trace_add("write", self._on_path_field_change)
 
-        # Path preview
+        # Configured path preview (theoretical, regardless of existence)
+        row_cfg = ttk.Frame(parent)
+        row_cfg.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(row_cfg, text="配置路径:", width=10).pack(side=tk.LEFT)
+        self._config_path_var = tk.StringVar(value="(选择参数后显示)")
+        ttk.Entry(
+            row_cfg,
+            textvariable=self._config_path_var,
+            state="readonly",
+            font=("Consolas", 9),
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True)
+
+        # Matched path preview (filesystem search result)
         row4 = ttk.Frame(parent)
         row4.pack(fill=tk.X, pady=(4, 0))
         ttk.Label(row4, text="匹配路径:", width=10).pack(side=tk.LEFT)
@@ -592,10 +618,151 @@ class GrabGui:
         if cur not in items:
             self._point_var.set(items[0] if items else "")  # type: ignore[union-attr]
 
+    # ── configured path display ──────────────────────────────────────────
+
+    def _update_configured_path(self) -> None:
+        """Build the theoretical dataset path from current selections and display it.
+
+        This path is computed purely from the selected options — it does **not**
+        check whether the directory actually exists on disk.
+
+        The config modules define ``DATASET_ROOT = DATASET_BASE / "<category_dir>"``
+        (e.g. ``…/material`` or ``…/empty_container``).  When the user overrides the
+        root to the top-level ``DATASET_BASE``, we automatically prepend the
+        category directory so the displayed path stays correct.
+        """
+        cfg = self._cfg
+        root = self._dataset_root
+        if root is None:
+            self._config_path_var.set("(未设置数据集根目录)")  # type: ignore[union-attr]
+            return
+
+        point_view = self._get_point_view()
+        if not point_view or point_view.endswith("-"):
+            self._config_path_var.set("(请完善点位和视角参数)")  # type: ignore[union-attr]
+            return
+
+        # Ensure the category directory is part of the path.  The config's
+        # DATASET_ROOT already includes it, but the user may have overridden
+        # the root to the parent DATASET_BASE.
+        if self._material_mode:
+            expected_dir = "material"
+        else:
+            expected_dir = "empty_container"
+
+        if root.name != expected_dir:
+            root = root / expected_dir
+
+        root_str = str(root)
+
+        if self._material_mode:
+            path = self._build_configured_path_material(root_str, point_view)
+        else:
+            path = self._build_configured_path_standard(root_str, point_view)
+
+        if path is not None:
+            self._config_path_var.set(path)  # type: ignore[union-attr]
+
+    @staticmethod
+    def _sanitize_name(name: str) -> str:
+        """Replace Windows-forbidden characters in a single path segment."""
+        return name.replace(":", "_")
+
+    def _build_configured_path_standard(self, root_str: str, point_view: str) -> str | None:
+        """Build path for empty_container (standard) mode."""
+        cfg = self._cfg
+
+        # Resolve container
+        cont_text = (self._container_var or tk.StringVar()).get().strip()
+        cont_id = _extract_id(cont_text)
+        if cont_id is None:
+            return "(请选择容器)"
+        container_en = self._sanitize_name(cfg.CONTAINERS.get(cont_id, str(cont_id)))
+
+        # Resolve anomaly type
+        ano_text = (self._anomaly_var or tk.StringVar()).get().strip()
+        ano_id = _extract_id(ano_text)
+        if ano_id is None:
+            return "(请选择异常类型)"
+        anomaly_en = self._sanitize_name(cfg.ANOMALY_TYPES.get(ano_id, str(ano_id)))
+
+        parts = [root_str, container_en, anomaly_en]
+
+        # Subcategory (only for non-normal anomaly types)
+        if ano_id != 1:
+            sub_text = (self._sub_var or tk.StringVar()).get().strip()
+            no_sub = getattr(cfg, "NO_SUBCATEGORY", "-")
+            if sub_text and sub_text != no_sub:
+                # sub_text could be Chinese display name — resolve to English
+                subs_en_map = {v: k for k, v in cfg.ANOMALY_SUBCATEGORIES_CN.items()}
+                sub_en = self._sanitize_name(subs_en_map.get(sub_text, sub_text))
+                parts.append(sub_en)
+
+        parts.append(point_view)
+        return "/".join(parts)
+
+    def _build_configured_path_material(self, root_str: str, point_view: str) -> str | None:
+        """Build path for material mode.
+
+        Directory structure::
+
+            raw_material / original_solution:
+                <root> / state / material / anomaly / container / point-view
+            gel / solution (no anomaly level):
+                <root> / state / material / container / point-view
+        """
+        cfg = self._cfg
+
+        # Resolve state
+        state_text = (self._state_var or tk.StringVar()).get().strip()
+        state_id = _extract_id(state_text)
+        if state_id is None:
+            return "(请选择材料状态)"
+        state_en = self._sanitize_name(cfg.MATERIAL_STATES.get(state_id, str(state_id)))
+
+        # Resolve material
+        mat_text = (self._material_var or tk.StringVar()).get().strip()
+        mat_id = _extract_id(mat_text)
+        if mat_id is None:
+            return "(请选择具体材料)"
+        materials_for_state = cfg.MATERIALS.get(state_id, {})
+        material_en = self._sanitize_name(materials_for_state.get(mat_id, str(mat_id)))
+
+        parts = [root_str, state_en, material_en]
+
+        # gel / solution have no anomaly level, but still have container
+        if state_en.lower() in ("gel", "solution"):
+            # container only (no anomaly)
+            cont_text = (self._container_var or tk.StringVar()).get().strip()
+            cont_id = _extract_id(cont_text)
+            if cont_id is not None:
+                container_en = self._sanitize_name(cfg.CONTAINERS.get(cont_id, str(cont_id)))
+                parts.append(container_en)
+        else:
+            # Resolve anomaly type
+            ano_text = (self._anomaly_var or tk.StringVar()).get().strip()
+            if ano_text != "—":
+                ano_id = _extract_id(ano_text)
+                if ano_id is not None:
+                    anomaly_en = self._sanitize_name(cfg.ANOMALY_TYPES.get(ano_id, str(ano_id)))
+                    parts.append(anomaly_en)
+
+            # Resolve container
+            cont_text = (self._container_var or tk.StringVar()).get().strip()
+            cont_id = _extract_id(cont_text)
+            if cont_id is not None:
+                container_en = self._sanitize_name(cfg.CONTAINERS.get(cont_id, str(cont_id)))
+                parts.append(container_en)
+
+        parts.append(point_view)
+        return "/".join(parts)
+
     # ── path field change → auto-resolve ────────────────────────────────
 
     def _on_path_field_change(self, *_args) -> None:
-        """Any parameter changed → resolve matching directories and show preview."""
+        """Any parameter changed → update configured path, resolve matching directories and show preview."""
+        # Update the theoretical configured path immediately
+        self._update_configured_path()
         # Cancel any pending resolution
         if self._search_after_id is not None:
             self.root.after_cancel(self._search_after_id)
@@ -623,6 +790,9 @@ class GrabGui:
                 mat_en_str = cfg.MATERIALS.get(sid or 0, {}).get(mat_en, str(mat_en))
             else:
                 mat_en_str = mat
+            # Normalise colons → underscores (config uses "01:polyvinyl_alcohol"
+            # but Windows directories use "01_polyvinyl_alcohol").
+            mat_en_str = mat_en_str.replace(":", "_")
             ano_text = (self._anomaly_var or tk.StringVar()).get().strip()
             ano_id = _extract_id(ano_text)
             ano_en = cfg.ANOMALY_TYPES.get(ano_id or 0, ano_text) if ano_id else ano_text
