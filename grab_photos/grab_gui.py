@@ -154,6 +154,13 @@ class GrabGui:
         self._search_after_id: str | None = None
         self._search_gen: int = 0  # generation counter for stale-result detection
         self._dataset_root_user_set: bool = self._init_dataset_root is not None
+        self._out_dir_user_set: bool = False
+        # ── experiment template ──
+        self._templates_dir: Path = Path(__file__).resolve().parent / "templates"
+        self._templates: dict[str, dict] = {}    # stem → {name, steps: [{order, name, operation, stage, checks, …}]}
+        self._active_template: dict | None = None  # currently selected template (the full dict)
+        self._active_template_stem: str = ""       # stem of active template
+        self._load_templates()
 
         # ── param widgets (rebuilt on category switch) ──
         self._param_frame: ttk.Frame | None = None
@@ -199,6 +206,10 @@ class GrabGui:
         main.pack(fill=tk.BOTH, expand=True)
 
         self._build_category_section(main)
+        ttk.Separator(main, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=2)
+
+        # Template section
+        self._build_template_section(main)
         ttk.Separator(main, orient=tk.HORIZONTAL).pack(fill=tk.X, pady=2)
 
         # Parameter section container (rebuilt on category switch)
@@ -1070,7 +1081,7 @@ class GrabGui:
                 cont_text = self._container_var.get()
                 type_display = cont_text.split(":", 1)[-1].strip() if ":" in cont_text else cont_text
 
-        return {
+        item = {
             "path": path,
             "dir_name": dir_name,
             "category": category,
@@ -1083,6 +1094,18 @@ class GrabGui:
             "materials": [],
         }
 
+        # Pre-fill checks from reference manifest based on predicted step number
+        if self._ref_step_checks:
+            predicted = self._predict_step_number(item)
+            tpl = self._ref_step_checks.get(predicted)
+            if tpl is not None:
+                item["checks"] = list(tpl.get("checks", []))
+                item["allowed_states"] = list(tpl.get("allowed_states", []))
+                item["anomaly_conditions"] = list(tpl.get("anomaly_conditions", []))
+                item["materials"] = list(tpl.get("materials", []))
+
+        return item
+
     def _add_current_image(self) -> None:
         """Add the currently displayed image to the end of the grab list."""
         item = self._build_image_item()
@@ -1093,10 +1116,14 @@ class GrabGui:
         self._image_list.append(item)
         self._refresh_treeview()
         self._pack_btn["state"] = tk.NORMAL
+        predicted = self._predict_step_number(item) if self._ref_step_checks else None
+        extra = ""
+        if predicted is not None and item.get("checks"):
+            extra = f"  (步骤 {predicted}, 已自动填充 {len(item['checks'])} 条检查项)"
         self._log(
             f"已添加: {item['path'].name}  "
             f"异常={item['anomaly']}  "
-            f"类型={item['type_info']}"
+            f"类型={item['type_info']}{extra}"
         )
 
     def _on_insert_after(self) -> None:
@@ -1119,10 +1146,14 @@ class GrabGui:
         children = self._tree.get_children()
         if insert_idx < len(children):
             self._tree.selection_set(children[insert_idx])
+        predicted = self._predict_step_number(item) if self._ref_step_checks else None
+        extra = ""
+        if predicted is not None and item.get("checks"):
+            extra = f"  (步骤 {predicted}, 已自动填充 {len(item['checks'])} 条检查项)"
         self._log(
             f"已插入 (#{insert_idx + 1}): {item['path'].name}  "
             f"异常={item['anomaly']}  "
-            f"类型={item['type_info']}"
+            f"类型={item['type_info']}{extra}"
         )
 
     # ── image list ──────────────────────────────────────────────────────
@@ -1133,13 +1164,13 @@ class GrabGui:
 
         columns = ("idx", "anomaly", "dir", "type_info", "stage", "checks")
         self._tree = ttk.Treeview(frame, columns=columns, show="headings", height=6)
-        self._tree.heading("idx", text="#")
+        self._tree.heading("idx", text="文件名")
         self._tree.heading("anomaly", text="异常类型")
         self._tree.heading("dir", text="目录 (点位-视角)")
         self._tree.heading("type_info", text="材料类型/容器类型")
         self._tree.heading("stage", text="Stage")
         self._tree.heading("checks", text="检查项")
-        self._tree.column("idx", width=36, anchor=tk.CENTER)
+        self._tree.column("idx", width=160, anchor=tk.W)
         self._tree.column("anomaly", width=100)
         self._tree.column("dir", width=140)
         self._tree.column("type_info", width=110)
@@ -1184,7 +1215,7 @@ class GrabGui:
                 "",
                 tk.END,
                 values=(
-                    i,
+                    item["path"].name,
                     item.get("anomaly", ""),
                     item["dir_name"],
                     item.get("type_info", ""),
@@ -1265,6 +1296,76 @@ class GrabGui:
         if "-" in dn:
             return dn.rsplit("-", 1)[0]
         return dn
+
+    @staticmethod
+    def _compute_step_key(item: dict) -> str:
+        """Compute the full step grouping key, exactly matching the logic in
+        ``_do_pack_in_thread``.
+
+        Uses the image's source path grandparent and the base point name
+        (dir_name without view-number suffix) so that all views of the same
+        shooting point share one key.
+        """
+        src = item["path"]
+        dn = item.get("dir_name", "")
+        vn = view_number_of(dn)
+        if vn is not None:
+            return str(src.parent.parent / dn.rsplit("-", 1)[0])
+        else:
+            return str(src.parent)
+
+    def _predict_step_number(self, item: dict) -> int:
+        """Predict the step number *item* would receive if added to the current list.
+
+        Mirrors the sequential numbering in ``_do_pack_in_thread``:
+        consecutive items sharing the same ``_compute_step_key`` get the
+        same step number; a new key increments it.
+        """
+        if not self._image_list:
+            return 1
+
+        # Walk existing items to find the last step number and last key
+        step_num = 1
+        prev_key: str | None = None
+        last_key: str | None = None
+        for existing in self._image_list:
+            key = self._compute_step_key(existing)
+            if prev_key is not None and key != prev_key:
+                step_num += 1
+            prev_key = key
+            last_key = key
+
+        # Compare new item's key with the last one
+        new_key = self._compute_step_key(item)
+        if last_key is not None and new_key != last_key:
+            step_num += 1
+
+        return step_num
+
+    @staticmethod
+    def _extract_step_checks_from_manifest(manifest: dict) -> dict[int, dict]:
+        """Extract a ``{step_order: {checks, ...}}`` mapping from a manifest.json dict.
+
+        Only the first non-empty entry for each step order is kept.
+        """
+        result: dict[int, dict] = {}
+        for img in manifest.get("images", []):
+            step = img.get("step", {})
+            order = step.get("order")
+            if order is None or order in result:
+                continue
+            checks = step.get("checks", [])
+            allowed = step.get("allowed_states", [])
+            anomaly = step.get("anomaly_conditions", [])
+            materials = step.get("materials", [])
+            if any([checks, allowed, anomaly, materials]):
+                result[order] = {
+                    "checks": list(checks),
+                    "allowed_states": list(allowed),
+                    "anomaly_conditions": list(anomaly),
+                    "materials": list(materials),
+                }
+        return result
 
     @staticmethod
     def _checks_summary(item: dict) -> str:
@@ -1421,12 +1522,31 @@ class GrabGui:
         frame = ttk.LabelFrame(parent, text="输出设置", padding=6)
         frame.pack(fill=tk.X)
 
-        ttk.Label(frame, text="描述说明:").pack(anchor=tk.W)
+        # ── description file import ──
+        desc_file_row = ttk.Frame(frame)
+        desc_file_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(desc_file_row, text="描述文件:", width=10).pack(side=tk.LEFT)
+        self._desc_file_var = tk.StringVar()
+        ttk.Entry(
+            desc_file_row,
+            textvariable=self._desc_file_var,
+            font=("Consolas", 9),
+            state="readonly",
+        ).pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 4))
+        ttk.Button(
+            desc_file_row, text="浏览...", command=self._on_browse_desc_file
+        ).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(
+            desc_file_row, text="清除", command=self._on_clear_desc_file
+        ).pack(side=tk.LEFT)
+
+        # ── description preview ──
+        ttk.Label(frame, text="描述内容:").pack(anchor=tk.W, pady=(4, 0))
         self._desc_text = scrolledtext.ScrolledText(
             frame, height=3, font=("微软雅黑", 9), wrap=tk.WORD
         )
         self._desc_text.insert(
-            tk.END, "在此输入描述文本…（可选，会写入 description.txt）"
+            tk.END, "请通过「描述文件」导入 txt 文件…（会写入 description.txt）"
         )
         self._desc_text.pack(fill=tk.X, pady=(2, 4))
 
@@ -1443,15 +1563,12 @@ class GrabGui:
         ttk.Entry(
             mod_row, textvariable=self._name_var, font=("微软雅黑", 9), width=28
         ).pack(side=tk.LEFT)
+        self._name_var.trace_add("write", self._on_name_change)
 
         row = ttk.Frame(frame)
         row.pack(fill=tk.X)
         ttk.Label(row, text="输出目录:").pack(side=tk.LEFT)
-        default_out = (
-            Path(__file__).resolve().parent
-            / "grabbed"
-            / datetime.now().strftime("%Y%m%d_%H%M%S")
-        )
+        default_out = self._make_default_out_dir()
         self._out_dir_var = tk.StringVar(value=str(default_out))
         ttk.Entry(
             row, textvariable=self._out_dir_var, font=("Consolas", 9)
@@ -1460,10 +1577,123 @@ class GrabGui:
             side=tk.LEFT
         )
 
+    def _make_default_out_dir(self) -> Path:
+        """Build default output directory: grabbed/<流程名称> or grabbed/<timestamp>."""
+        name = (self._name_var.get().strip() if self._name_var else "")
+        if name:
+            return Path(__file__).resolve().parent / "grabbed" / name
+        return (
+            Path(__file__).resolve().parent
+            / "grabbed"
+            / datetime.now().strftime("%Y%m%d_%H%M%S")
+        )
+
+    def _on_name_change(self, *_args) -> None:
+        """When the user edits the process name, update the output dir (unless user-set)."""
+        if self._out_dir_user_set:
+            return
+        self._out_dir_var.set(str(self._make_default_out_dir()))
+
     def _on_browse_out_dir(self) -> None:
         d = filedialog.askdirectory(title="选择输出目录")
         if d:
             self._out_dir_var.set(d)
+            self._out_dir_user_set = True
+
+    # ── description file import ─────────────────────────────────────────
+
+    def _on_browse_desc_file(self) -> None:
+        """Open a file dialog to import description content from a .txt file."""
+        path_str = filedialog.askopenfilename(
+            title="选择描述文件",
+            filetypes=[("文本文件", "*.txt"), ("所有文件", "*.*")],
+        )
+        if not path_str:
+            return
+        file_path = Path(path_str)
+        try:
+            content = file_path.read_text(encoding="utf-8")
+        except Exception as exc:
+            messagebox.showerror("读取失败", f"无法读取描述文件:\n{exc}")
+            return
+
+        self._desc_file_var.set(str(file_path))
+
+        # Populate the description text area with the file content
+        self._desc_text.delete("1.0", tk.END)
+        self._desc_text.insert(tk.END, content)
+
+        # Auto-generate process name: {parent folder name}-{file stem}
+        folder_name = file_path.parent.name
+        file_stem = file_path.stem
+        auto_name = f"{folder_name}-{file_stem}"
+        if self._name_var is not None:
+            self._name_var.set(auto_name)
+        self._log(f"已导入描述文件: {file_path.name}，流程名称: {auto_name}")
+
+    def _on_clear_desc_file(self) -> None:
+        """Clear the imported description file and content."""
+        self._desc_file_var.set("")
+        self._desc_text.delete("1.0", tk.END)
+        self._desc_text.insert(
+            tk.END, "请通过「描述文件」导入 txt 文件…（会写入 description.txt）"
+        )
+        # Reset process name and output directory
+        self._out_dir_user_set = False
+        if self._name_var is not None:
+            self._name_var.set("")
+        self._log("已清除描述文件")
+
+    # ── reference manifest (checks template) ────────────────────────────
+
+    def _on_load_reference_manifest(self) -> None:
+        """Open a file dialog to load a manifest.json as a checks template.
+
+        Extracts ``{step_order: {checks, ...}}`` so that subsequently added
+        images get default checks based on their predicted step number.
+        """
+        path_str = filedialog.askopenfilename(
+            title="加载参考 manifest.json",
+            filetypes=[
+                ("manifest.json", "manifest.json"),
+                ("JSON 文件", "*.json"),
+                ("所有文件", "*.*"),
+            ],
+        )
+        if not path_str:
+            return
+        self._set_reference_manifest(Path(path_str))
+
+    def _set_reference_manifest(self, file_path: Path) -> None:
+        """Parse *file_path* as a manifest.json and store step→checks mapping."""
+        if not file_path.is_file():
+            messagebox.showwarning("文件不存在", f"找不到:\n{file_path}")
+            return
+        try:
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            messagebox.showerror("解析失败", f"无法解析 manifest.json:\n{exc}")
+            return
+
+        # Detect format: manifest.json has "images" with "step" objects
+        images = data.get("images")
+        if not isinstance(images, list):
+            messagebox.showwarning("格式不符", "该 JSON 文件不包含 'images' 数组，不是有效的 manifest.json。")
+            return
+
+        extracted = self._extract_step_checks_from_manifest(data)
+        if not extracted:
+            messagebox.showwarning("无检查项", "manifest.json 中各步骤均未定义 checks，没有可导入的默认值。")
+            return
+
+        self._ref_step_checks = extracted
+        self._ref_manifest_path = file_path
+        steps_str = ",".join(str(o) for o in sorted(extracted))
+        self._ref_status_var.set(f"参考: {file_path.name} (步骤 {steps_str})")
+        self._log(
+            f"已加载参考 manifest: {file_path.name}  "
+            f"({len(extracted)} 个步骤有检查项定义，步骤: {steps_str})"
+        )
 
     # ── sequence load / save ────────────────────────────────────────────
 
@@ -1483,7 +1713,15 @@ class GrabGui:
         self._load_sequence_from_file(Path(path_str))
 
     def _load_sequence_from_file(self, file_path: Path) -> None:
-        """从 JSON 或 CSV 文件加载图片序列到列表中。"""
+        """从 JSON 或 CSV 文件加载图片序列到列表中。
+
+        支持三种格式：
+
+        1. **sequence.json** — ``{"items": [{source, dir_name, ...}]}``
+        2. **CSV** — 列: source, dir_name, category, anomaly, type_info, stage, checks, …
+        3. **manifest.json** — ``{"images": [{file, step: {order, checks, …}}]}``
+           图片路径从 manifest 所在目录的相对路径解析。
+        """
         if not file_path.is_file():
             messagebox.showwarning("文件不存在", f"序列文件不存在:\n{file_path}")
             return
@@ -1494,8 +1732,24 @@ class GrabGui:
             raw = file_path.read_text(encoding="utf-8")
             if file_path.suffix.lower() == ".json":
                 data = json.loads(raw)
-                desc = data.get("description", "")
-                items_data = data.get("items", [])
+
+                # ── detect manifest.json format ──
+                if "images" in data and isinstance(data.get("images"), list):
+                    items_data, desc = self._parse_manifest_json(data, file_path)
+                    # Also set as reference for future image additions
+                    self._ref_step_checks = self._extract_step_checks_from_manifest(data)
+                    self._ref_manifest_path = file_path
+                    extracted = self._ref_step_checks
+                    if extracted:
+                        steps_str = ",".join(str(o) for o in sorted(extracted))
+                        self._ref_status_var.set(f"参考: {file_path.name} (步骤 {steps_str})")
+                else:
+                    # ── sequence.json format ──
+                    desc = data.get("description", "")
+                    items_data = data.get("items", [])
+                    # Also extract step→checks from loaded items as reference
+                    self._extract_ref_from_items(items_data)
+
             elif file_path.suffix.lower() == ".csv":
                 import io
                 reader = csv.DictReader(io.StringIO(raw))
@@ -1558,6 +1812,101 @@ class GrabGui:
             f"(成功 {loaded} 张, 跳过 {skipped} 张)"
         )
 
+    @staticmethod
+    def _parse_manifest_json(data: dict, manifest_path: Path) -> tuple[list[dict], str]:
+        """Convert manifest.json ``images`` array to sequence-item dicts.
+
+        Resolves each image's ``file`` path relative to *manifest_path*'s
+        parent directory (the grabbed output folder).
+        """
+        items: list[dict] = []
+        desc_parts: list[str] = []
+        seen_steps: dict[int, str] = {}  # order → name
+        base_dir = manifest_path.parent  # e.g. grabbed/xxx/
+
+        for img in data.get("images", []):
+            rel_file = img.get("file", "")
+            step = img.get("step", {})
+            order = step.get("order", 0)
+            step_name = step.get("name", "")
+
+            # Collect description lines from unique steps
+            if order and order not in seen_steps:
+                seen_steps[order] = step_name
+                operation = step.get("operation", "")
+                desc_parts.append(f"{order}.{operation}")
+
+            # Resolve source path relative to the manifest's parent directory.
+            # Works for both root manifest (file="raw/01-001.png")
+            # and per-stage manifest (file="01-001.png").
+            src = base_dir / rel_file
+
+            items.append({
+                "source": str(src),
+                "dir_name": src.parent.name if src.is_file() else Path(rel_file).parent.name,
+                "category": "",
+                "anomaly": "",
+                "type_info": "",
+                "stage": step.get("stage", img.get("file", "").split("/")[0] if "/" in img.get("file", "") else "raw"),
+                "checks": step.get("checks", []),
+                "allowed_states": step.get("allowed_states", []),
+                "anomaly_conditions": step.get("anomaly_conditions", []),
+                "materials": step.get("materials", []),
+            })
+
+        desc = "\n".join(desc_parts)
+        return items, desc
+
+    def _extract_ref_from_items(self, items_data: list[dict]) -> None:
+        """Extract step→checks reference from loaded sequence items.
+
+        Simulates the step-numbering logic on the loaded items to map each
+        step order to its checks, then stores it in ``_ref_step_checks``.
+        """
+        if not items_data:
+            return
+
+        # Build temporary items (without full Path objects) for step-key computation
+        temp_items: list[dict] = []
+        for d in items_data:
+            src = d.get("source", "")
+            temp_items.append({
+                "path": Path(src) if src else Path("."),
+                "dir_name": d.get("dir_name", ""),
+                "checks": d.get("checks", []),
+                "allowed_states": d.get("allowed_states", []),
+                "anomaly_conditions": d.get("anomaly_conditions", []),
+                "materials": d.get("materials", []),
+            })
+
+        extracted: dict[int, dict] = {}
+        step_num = 1
+        prev_key: str | None = None
+
+        for item in temp_items:
+            key = self._compute_step_key(item)
+            if prev_key is not None and key != prev_key:
+                step_num += 1
+            prev_key = key
+
+            if step_num not in extracted:
+                has_any = any(item.get(k) for k in ("checks", "allowed_states", "anomaly_conditions", "materials"))
+                if has_any:
+                    extracted[step_num] = {
+                        "checks": list(item.get("checks", [])),
+                        "allowed_states": list(item.get("allowed_states", [])),
+                        "anomaly_conditions": list(item.get("anomaly_conditions", [])),
+                        "materials": list(item.get("materials", [])),
+                    }
+
+        if extracted:
+            self._ref_step_checks = extracted
+            steps_str = ",".join(str(o) for o in sorted(extracted))
+            self._ref_status_var.set(f"参考: 已加载序列 ({len(extracted)} 步骤)")
+            self._log(
+                f"  已从序列中提取 {len(extracted)} 个步骤的检查项模板 (步骤: {steps_str})"
+            )
+
     # ── action section ──────────────────────────────────────────────────
 
     def _build_action_section(self, parent: ttk.Frame) -> None:
@@ -1575,6 +1924,16 @@ class GrabGui:
             text="📂 加载序列",
             command=self._on_load_sequence,
         ).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(
+            frame,
+            text="📋 加载参考manifest",
+            command=self._on_load_reference_manifest,
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        # Show reference status
+        self._ref_status_var = tk.StringVar(value="")
+        ttk.Label(
+            frame, textvariable=self._ref_status_var, foreground="gray", font=("微软雅黑", 8)
+        ).pack(side=tk.LEFT, padx=(8, 0))
 
     # ── log section ─────────────────────────────────────────────────────
 
@@ -1662,7 +2021,7 @@ class GrabGui:
         self._packing = True
         self._pack_btn["state"] = tk.DISABLED
         desc = self._desc_text.get("1.0", tk.END).strip()
-        if desc == "在此输入描述文本…（可选，会写入 description.txt）":
+        if desc == "请通过「描述文件」导入 txt 文件…（会写入 description.txt）":
             desc = ""
         items = list(self._image_list)
 
@@ -1803,7 +2162,8 @@ class GrabGui:
             csv_path = out_dir / "manifest.csv"
             with csv_path.open("w", encoding="utf-8", newline="") as fh:
                 writer = csv.DictWriter(
-                    fh, fieldnames=["output", "source", "dir_name", "category", "anomaly", "type_info", "stage"]
+                    fh, fieldnames=["output", "source", "dir_name", "category", "anomaly", "type_info", "stage"],
+                    extrasaction='ignore',
                 )
                 writer.writeheader()
                 writer.writerows(manifest_rows)
