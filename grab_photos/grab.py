@@ -499,6 +499,31 @@ def generate_module_json(
     steps = parse_description_steps(description)
     steps_by_order: dict[int, dict] = {s["order"]: s for s in steps}
 
+    # ── build step-level checks lookup from manifest_rows ──
+    # For each step number, collect the checks from the first row that has
+    # non-empty data (user may have only edited one image per step).
+    step_checks: dict[int, dict] = {}
+    for r in manifest_rows:
+        output_name = r.get("output", "")
+        stem = Path(output_name).stem
+        parts = stem.split("-")
+        try:
+            step_order = int(parts[0])
+        except (ValueError, IndexError):
+            step_order = 1
+        if step_order not in step_checks:
+            has_any = any(
+                r.get(k)
+                for k in ("checks", "allowed_states", "anomaly_conditions", "materials")
+            )
+            if has_any:
+                step_checks[step_order] = {
+                    "checks": r.get("checks", []),
+                    "allowed_states": r.get("allowed_states", []),
+                    "anomaly_conditions": r.get("anomaly_conditions", []),
+                    "materials": r.get("materials", []),
+                }
+
     images: list[dict] = []
     for r in manifest_rows:
         output_name = r.get("output", "")
@@ -517,14 +542,26 @@ def generate_module_json(
             "id": f"step_{step_order:02d}",
         })
 
-        # 获取源文件修改时间
+        # 获取源文件修改时间（带时区）
         src_path_str = r.get("source", "")
         try:
             mtime = datetime.fromtimestamp(
                 Path(src_path_str).stat().st_mtime
-            ).isoformat()
+            ).astimezone().isoformat()
         except Exception:
-            mtime = datetime.now().isoformat()
+            mtime = datetime.now().astimezone().isoformat()
+
+        # Prefer step-level checks from manifest_rows, fall back to item-level,
+        # then to empty lists.
+        tpl = step_checks.get(
+            step_order,
+            {
+                "checks": r.get("checks", []),
+                "allowed_states": r.get("allowed_states", []),
+                "anomaly_conditions": r.get("anomaly_conditions", []),
+                "materials": r.get("materials", []),
+            },
+        )
 
         images.append({
             "file": output_name,
@@ -536,10 +573,10 @@ def generate_module_json(
                 "name": f"步骤 {step_order} · {step.get('name', '')}",
                 "operation": step.get("name", ""),
                 "stage": r.get("stage", "raw"),
-                "checks": [],
-                "allowed_states": [],
-                "anomaly_conditions": [],
-                "materials": [],
+                "checks": tpl.get("checks", []),
+                "allowed_states": tpl.get("allowed_states", []),
+                "anomaly_conditions": tpl.get("anomaly_conditions", []),
+                "materials": tpl.get("materials", []),
             },
         })
 
@@ -842,6 +879,12 @@ def main():
                 img for img in module_json["images"]
                 if img["file"].startswith(f"{stage_name}/")
             ]
+            # Strip the stage/ prefix so file paths are relative to
+            # the per-stage manifest.json (matches the template convention).
+            prefix = f"{stage_name}/"
+            for img in stage_images:
+                if img["file"].startswith(prefix):
+                    img["file"] = img["file"][len(prefix):]
             stage_manifest = {
                 "schema_version": module_json["schema_version"],
                 "process_id": module_json["process_id"],

@@ -67,6 +67,22 @@ def _extract_id(combo_text: str) -> int | None:
         return None
 
 
+def _parse_csv_list_field(raw: str) -> list[str]:
+    """Parse a CSV cell that may contain a JSON array or newline-separated items."""
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    if raw.startswith("["):
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                return [str(x) for x in parsed]
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # Fallback: treat as newline-separated (e.g. from manual CSV editing)
+    return [line.strip() for line in raw.splitlines() if line.strip()]
+
+
 def _set_combo_options(
     combo: ttk.Combobox,
     var: tk.StringVar,
@@ -1061,6 +1077,10 @@ class GrabGui:
             "anomaly": ano_display,
             "type_info": type_display,
             "stage": self._stage_var.get().strip() if self._stage_var else "raw",
+            "checks": [],
+            "allowed_states": [],
+            "anomaly_conditions": [],
+            "materials": [],
         }
 
     def _add_current_image(self) -> None:
@@ -1111,18 +1131,20 @@ class GrabGui:
         frame = ttk.LabelFrame(parent, text="已选图片列表", padding=4)
         frame.pack(fill=tk.BOTH, expand=False)
 
-        columns = ("idx", "anomaly", "dir", "type_info", "stage")
+        columns = ("idx", "anomaly", "dir", "type_info", "stage", "checks")
         self._tree = ttk.Treeview(frame, columns=columns, show="headings", height=6)
         self._tree.heading("idx", text="#")
         self._tree.heading("anomaly", text="异常类型")
         self._tree.heading("dir", text="目录 (点位-视角)")
         self._tree.heading("type_info", text="材料类型/容器类型")
         self._tree.heading("stage", text="Stage")
+        self._tree.heading("checks", text="检查项")
         self._tree.column("idx", width=36, anchor=tk.CENTER)
-        self._tree.column("anomaly", width=120)
-        self._tree.column("dir", width=160)
-        self._tree.column("type_info", width=130)
-        self._tree.column("stage", width=70, anchor=tk.CENTER)
+        self._tree.column("anomaly", width=100)
+        self._tree.column("dir", width=140)
+        self._tree.column("type_info", width=110)
+        self._tree.column("stage", width=60, anchor=tk.CENTER)
+        self._tree.column("checks", width=80, anchor=tk.CENTER)
 
         vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
@@ -1146,6 +1168,9 @@ class GrabGui:
         ttk.Button(btn_row, text="▼ 插入到选中下方", command=self._on_insert_after).pack(
             side=tk.LEFT, padx=(0, 4)
         )
+        ttk.Button(btn_row, text="📋 编辑检查项", command=self._on_edit_checks).pack(
+            side=tk.LEFT, padx=(0, 4)
+        )
         self._list_count_var = tk.StringVar(value="共 0 张")
         ttk.Label(btn_row, textvariable=self._list_count_var).pack(
             side=tk.RIGHT, padx=(8, 0)
@@ -1164,6 +1189,7 @@ class GrabGui:
                     item["dir_name"],
                     item.get("type_info", ""),
                     item.get("stage", "raw"),
+                    self._checks_summary(item),
                 ),
             )
         self._list_count_var.set(f"共 {len(self._image_list)} 张")
@@ -1224,6 +1250,170 @@ class GrabGui:
         children = self._tree.get_children()
         if idx + 1 < len(children):
             self._tree.selection_set(children[idx + 1])
+
+    # ── checks editing ──────────────────────────────────────────────────
+
+    @staticmethod
+    def _step_key_of(item: dict) -> str:
+        """Return a grouping key for images that belong to the same step.
+
+        Images sharing the same parent-point (dir_name without view suffix)
+        are considered the same step.  This mirrors the step-grouping logic
+        in ``_do_pack_in_thread``.
+        """
+        dn = item.get("dir_name", "")
+        if "-" in dn:
+            return dn.rsplit("-", 1)[0]
+        return dn
+
+    @staticmethod
+    def _checks_summary(item: dict) -> str:
+        """Return a one-line summary of the checks fields for treeview display."""
+        parts: list[str] = []
+        for field in ("checks", "allowed_states", "anomaly_conditions", "materials"):
+            vals = item.get(field, [])
+            if vals:
+                parts.append(f"{len(vals)}")
+            else:
+                parts.append("0")
+        total = sum(
+            len(item.get(f, []))
+            for f in ("checks", "allowed_states", "anomaly_conditions", "materials")
+        )
+        if total == 0:
+            return ""
+        return f"✓ {total}项"
+
+    def _on_edit_checks(self) -> None:
+        """Open the checks editing dialog for the currently selected image."""
+        selected = self._tree.selection()
+        if not selected:
+            messagebox.showwarning("未选中", "请先在列表中选择一张图片。")
+            return
+        idx = self._tree.index(selected[0])
+        if idx < 0 or idx >= len(self._image_list):
+            return
+        self._open_checks_dialog(idx)
+
+    def _open_checks_dialog(self, idx: int) -> None:
+        """Create and show the checks editing popup for ``self._image_list[idx]``."""
+        item = self._image_list[idx]
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("编辑检查项")
+        dialog.geometry("620x680")
+        dialog.minsize(480, 500)
+        dialog.resizable(True, True)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # ── info header ──
+        info_frame = ttk.Frame(dialog, padding=8)
+        info_frame.pack(fill=tk.X)
+        ttk.Label(
+            info_frame,
+            text=f"图片: {item['path'].name}",
+            font=("Consolas", 10, "bold"),
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            info_frame,
+            text=f"目录: {item.get('dir_name', '')}    步骤分组: {self._step_key_of(item)}",
+            font=("Consolas", 9),
+        ).pack(anchor=tk.W)
+        ttk.Label(
+            info_frame,
+            text=f"Stage: {item.get('stage', 'raw')}    异常: {item.get('anomaly', '')}",
+        ).pack(anchor=tk.W)
+
+        ttk.Separator(dialog, orient=tk.HORIZONTAL).pack(fill=tk.X, padx=8)
+
+        # ── editable fields ──
+        field_specs = [
+            ("checks", "检查项 (checks)", "每行一条检查标准，例如：确认粉末位于目标烧杯内"),
+            ("allowed_states", "允许状态 (allowed_states)", "每行一条允许出现的正常状态"),
+            ("anomaly_conditions", "异常条件 (anomaly_conditions)", "每行一条异常判断条件"),
+            ("materials", "材料 (materials)", "每行一种本步骤涉及的材料"),
+        ]
+
+        text_widgets: dict[str, tk.Text] = {}
+
+        for field_name, title, hint in field_specs:
+            frame = ttk.LabelFrame(dialog, text=title, padding=4)
+            frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(4, 0))
+
+            # Hint label
+            ttk.Label(frame, text=hint, foreground="gray", font=("微软雅黑", 8)).pack(
+                anchor=tk.W
+            )
+
+            text_frame = ttk.Frame(frame)
+            text_frame.pack(fill=tk.BOTH, expand=True, pady=(2, 0))
+
+            text_widget = tk.Text(
+                text_frame, height=3, font=("微软雅黑", 9), wrap=tk.WORD
+            )
+            scrollbar = ttk.Scrollbar(
+                text_frame, orient=tk.VERTICAL, command=text_widget.yview
+            )
+            text_widget.configure(yscrollcommand=scrollbar.set)
+            text_widget.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+            # Fill current values
+            current = item.get(field_name, [])
+            if current:
+                text_widget.insert("1.0", "\n".join(current))
+
+            text_widgets[field_name] = text_widget
+
+        # ── action buttons ──
+        btn_frame = ttk.Frame(dialog, padding=8)
+        btn_frame.pack(fill=tk.X)
+
+        def _apply_to_same_step() -> None:
+            """Copy current field values to all images sharing the same step key."""
+            step_key = self._step_key_of(item)
+            count = 0
+            for other in self._image_list:
+                if self._step_key_of(other) == step_key:
+                    for fname, _, _ in field_specs:
+                        raw = text_widgets[fname].get("1.0", tk.END).strip()
+                        other[fname] = [
+                            line.strip()
+                            for line in raw.splitlines()
+                            if line.strip()
+                        ]
+                    count += 1
+            self._refresh_treeview()
+            self._log(f"已应用检查项到步骤分组 '{step_key}' 的 {count} 张图片")
+
+        def _save_and_close() -> None:
+            """Write field values back to the item and close."""
+            for fname, _, _ in field_specs:
+                raw = text_widgets[fname].get("1.0", tk.END).strip()
+                item[fname] = [
+                    line.strip() for line in raw.splitlines() if line.strip()
+                ]
+            self._refresh_treeview()
+            total = sum(
+                len(item.get(f, []))
+                for f in ("checks", "allowed_states", "anomaly_conditions", "materials")
+            )
+            self._log(f"已更新 {item['path'].name} 的检查项 (共 {total} 条)")
+            dialog.destroy()
+
+        ttk.Button(
+            btn_frame, text="📋 应用到同步骤所有图片", command=_apply_to_same_step
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="确定", command=_save_and_close).pack(
+            side=tk.RIGHT, padx=(8, 0)
+        )
+        ttk.Button(btn_frame, text="取消", command=dialog.destroy).pack(side=tk.RIGHT)
+
+        # Keyboard: Ctrl+Enter to save
+        dialog.bind(
+            "<Control-Return>", lambda _e: _save_and_close()
+        )
 
     # ── output section ──────────────────────────────────────────────────
 
@@ -1317,6 +1507,10 @@ class GrabGui:
                         "anomaly": row.get("anomaly", ""),
                         "type_info": row.get("type_info", ""),
                         "stage": row.get("stage", "raw"),
+                        "checks": _parse_csv_list_field(row.get("checks", "")),
+                        "allowed_states": _parse_csv_list_field(row.get("allowed_states", "")),
+                        "anomaly_conditions": _parse_csv_list_field(row.get("anomaly_conditions", "")),
+                        "materials": _parse_csv_list_field(row.get("materials", "")),
                     })
             else:
                 messagebox.showwarning("不支持的格式", f"请选择 .json 或 .csv 文件。")
@@ -1345,6 +1539,10 @@ class GrabGui:
                 "anomaly": item_data.get("anomaly", ""),
                 "type_info": item_data.get("type_info", ""),
                 "stage": item_data.get("stage", "raw"),
+                "checks": item_data.get("checks", []),
+                "allowed_states": item_data.get("allowed_states", []),
+                "anomaly_conditions": item_data.get("anomaly_conditions", []),
+                "materials": item_data.get("materials", []),
             })
             loaded += 1
 
@@ -1575,6 +1773,10 @@ class GrabGui:
                         "anomaly": item.get("anomaly", ""),
                         "type_info": item.get("type_info", ""),
                         "stage": stage,
+                        "checks": item.get("checks", []),
+                        "allowed_states": item.get("allowed_states", []),
+                        "anomaly_conditions": item.get("anomaly_conditions", []),
+                        "materials": item.get("materials", []),
                     }
                 )
                 if i % 10 == 0 or i == total:
@@ -1620,6 +1822,10 @@ class GrabGui:
                         "anomaly": r.get("anomaly", ""),
                         "type_info": r.get("type_info", ""),
                         "stage": r.get("stage", "raw"),
+                        "checks": r.get("checks", []),
+                        "allowed_states": r.get("allowed_states", []),
+                        "anomaly_conditions": r.get("anomaly_conditions", []),
+                        "materials": r.get("materials", []),
                     }
                     for r in manifest_rows
                 ],
@@ -1646,6 +1852,12 @@ class GrabGui:
                     img for img in module_json["images"]
                     if img["file"].startswith(f"{stage_name}/")
                 ]
+                # Strip the stage/ prefix so file paths are relative to
+                # the per-stage manifest.json (matches the template convention).
+                prefix = f"{stage_name}/"
+                for img in stage_images:
+                    if img["file"].startswith(prefix):
+                        img["file"] = img["file"][len(prefix):]
                 stage_manifest = {
                     "schema_version": module_json["schema_version"],
                     "process_id": module_json["process_id"],
