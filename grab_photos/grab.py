@@ -115,6 +115,7 @@ NO_ZIP = False     # True: 不打包，仅生成文件夹
 import argparse
 import csv
 import importlib
+import json
 import re
 import shutil
 import sys
@@ -449,6 +450,109 @@ def safe_name(base: str, used: set, hint: str = ""):
 
 
 # --------------------------------------------------------------------------
+# module.json 生成
+# --------------------------------------------------------------------------
+
+def parse_description_steps(desc: str) -> list[dict]:
+    """从描述文本中解析编号步骤。
+
+    匹配形如 ``1.xxx``、``1、xxx``、``1)xxx`` 的行，
+    返回 ``[{order, name, id}, ...]`` 列表。
+    非步骤行（分隔符 ``----``、空行等）会被忽略。
+    """
+    steps: list[dict] = []
+    for line in desc.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        m = re.match(r'^(\d+)[\.、)\s]+(.+)', line)
+        if m:
+            order = int(m.group(1))
+            name = m.group(2).strip()
+            step_id = f"step_{order:02d}"
+            steps.append({"order": order, "name": name, "id": step_id})
+    return steps
+
+
+def generate_module_json(
+    manifest_rows: list[dict],
+    description: str,
+    process_id: str = "",
+    name: str = "",
+    version: int = 4,
+) -> dict:
+    """根据清单行和描述文本生成 module.json 结构。
+
+    Parameters
+    ----------
+    manifest_rows:
+        每条至少包含 ``output`` (目标文件名) 和 ``source`` (原始路径)。
+    description:
+        描述文本，从中解析步骤信息。
+    process_id:
+        流程标识符，留空则使用 ``"untitled"``。
+    name:
+        流程名称，留空则使用 ``"未命名流程"``。
+    version:
+        版本号，默认 4。
+    """
+    steps = parse_description_steps(description)
+    steps_by_order: dict[int, dict] = {s["order"]: s for s in steps}
+
+    images: list[dict] = []
+    for r in manifest_rows:
+        output_name = r.get("output", "")
+        # 从文件名解析步骤编号和视角编号，例如 "01-001.png" → step=1, view="001"
+        stem = Path(output_name).stem
+        parts = stem.split("-")
+        try:
+            step_order = int(parts[0])
+        except (ValueError, IndexError):
+            step_order = 1
+        view = parts[1] if len(parts) > 1 else "001"
+
+        step = steps_by_order.get(step_order, {
+            "order": step_order,
+            "name": f"步骤 {step_order}",
+            "id": f"step_{step_order:02d}",
+        })
+
+        # 获取源文件修改时间
+        src_path_str = r.get("source", "")
+        try:
+            mtime = datetime.fromtimestamp(
+                Path(src_path_str).stat().st_mtime
+            ).isoformat()
+        except Exception:
+            mtime = datetime.now().isoformat()
+
+        images.append({
+            "file": output_name,
+            "time": mtime,
+            "view": view,
+            "step": {
+                "id": step.get("id", f"step_{step_order:02d}"),
+                "order": step_order,
+                "name": f"步骤 {step_order} · {step.get('name', '')}",
+                "operation": step.get("name", ""),
+                "stage": r.get("stage", "raw"),
+                "checks": [],
+                "allowed_states": [],
+                "anomaly_conditions": [],
+                "materials": [],
+            },
+        })
+
+    return {
+        "schema_version": 3,
+        "process_id": process_id or "untitled",
+        "name": name or "未命名流程",
+        "version": version,
+        "images": images,
+    }
+
+
+# --------------------------------------------------------------------------
 # 主流程
 # --------------------------------------------------------------------------
 def main():
@@ -471,6 +575,8 @@ def main():
     ap.add_argument("--output", help="输出目录 (覆盖脚本 OUTPUT_DIR)")
     ap.add_argument("--no-zip", action="store_true", help="不打压缩包，仅生成文件夹")
     ap.add_argument("--dry-run", action="store_true", help="只打印计划，不复制/打包")
+    ap.add_argument("--process-id", help="module.json 的 process_id (默认使用输出目录名)")
+    ap.add_argument("--name", help="module.json 的流程名称 (默认使用描述首行)")
     args = ap.parse_args()
 
     # 1) 收集条目：优先 CLI，其次 manifest，最后用脚本内 ITEMS
@@ -590,14 +696,18 @@ def main():
     if not dry_run:
         out_dir.mkdir(parents=True, exist_ok=True)
 
-    # 6) 复制 + 重命名
-    # 命名规则：<步骤数>-<视角编号>.ext
+    # ═════════════════════════════════════════════════════════════════
+    # Phase 1 — 编号命名：为每张图片确定唯一的扁平文件名
+    #           （与子文件夹无关，仅按步骤+视角+图片序号编号）
+    # ═════════════════════════════════════════════════════════════════
+    # 命名规则：<步骤数>-<视角编号>[-<图片序号>].ext
     #   步骤数：顺序计数器，仅当"路径直到点位文件夹 '-' 之前"与上一张不同时才 +1
     #   视角编号：直接从目录名末尾提取（如 -001 → 001）
-    used = set()
-    manifest_rows = []
+    named_photos: list[tuple[str, Path, str, str, str, str]] = []  # (cat, img, typ, ano, pv, base_name)
+    used_flat_names: set[str] = set()
     prev_step_key: str | None = None
     step_num = 0
+
     for cat, typ, ano, pv, d, imgs in plan:
         vn = view_number_of(d.name)
         # 构建步骤键：完整父目录 + 点位名（不含视角编号）
@@ -615,30 +725,76 @@ def main():
             ext = img.suffix.lower()
             if vn is not None:
                 if len(imgs) > 1:
-                    base = safe_name(f"{step_num:02d}-{vn:03d}-{idx:03d}{ext}", used, hint=d.name)
+                    base_name = f"{step_num:02d}-{vn:03d}-{idx:03d}{ext}"
                 else:
-                    base = safe_name(f"{step_num:02d}-{vn:03d}{ext}", used, hint=d.name)
+                    base_name = f"{step_num:02d}-{vn:03d}{ext}"
             else:
-                base = safe_name(f"{step_num:02d}-{idx:03d}{ext}", used, hint=d.name)
-            dest = out_dir / base
-            if dry_run:
-                log(f"[DRY-RUN] {img}  ->  {dest}")
-            else:
-                shutil.copy2(img, dest)
-            manifest_rows.append({
-                "output": base,
-                "source": str(img),
-                "view_dir": str(d),
-                "category": cat,
-                "type": typ,
-                "anomaly": ano,
-                "point_view": pv,
-                "view_prefix": f"{step_num:02d}-{vn:03d}" if vn is not None else f"{step_num:02d}",
-            })
+                base_name = f"{step_num:02d}-{idx:03d}{ext}"
+
+            # 碰撞安全：扁平命名空间内保证唯一
+            while base_name in used_flat_names:
+                step_num += 1
+                if vn is not None:
+                    if len(imgs) > 1:
+                        base_name = f"{step_num:02d}-{vn:03d}-{idx:03d}{ext}"
+                    else:
+                        base_name = f"{step_num:02d}-{vn:03d}{ext}"
+                else:
+                    base_name = f"{step_num:02d}-{idx:03d}{ext}"
+            used_flat_names.add(base_name)
+
+            named_photos.append((cat, img, typ, ano, pv, base_name))
             idx += 1
 
-    total = len(manifest_rows)
-    log(f"共复制 {total} 张图片到 {out_dir}")
+    total = len(named_photos)
+    log(f"编号完成，共 {total} 张图片")
+
+    if total == 0:
+        log("[错误] 没有任何可复制的图片")
+        return 2
+
+    # ═════════════════════════════════════════════════════════════════
+    # Phase 2 — 归档：按 stage 分配到子文件夹，复制文件
+    #          （命名已确定，此处只负责文件夹分配与文件复制）
+    # ═════════════════════════════════════════════════════════════════
+    used_destrels: set[str] = set()
+    manifest_rows: list[dict] = []
+
+    for cat, img, typ, ano, pv, base_name in named_photos:
+        stage = "raw"  # CLI always defaults to raw
+        dest_rel = f"{stage}/{base_name}"
+
+        # 处理极端情况下的跨 stage 冲突
+        while dest_rel in used_destrels:
+            stem, dot, ext = base_name.rpartition(".")
+            ext = ("." + ext) if dot else ""
+            base_name = f"{stem}_2{ext}"
+            dest_rel = f"{stage}/{base_name}"
+        used_destrels.add(dest_rel)
+
+        dest = out_dir / dest_rel
+        if dry_run:
+            log(f"[DRY-RUN] {img}  ->  {dest}")
+        else:
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(img, dest)
+
+        # Recover vn from base_name for manifest
+        stem = Path(base_name).stem
+        vn_str = stem.split("-")[1] if "-" in stem else "000"
+        manifest_rows.append({
+            "output": dest_rel,
+            "source": str(img),
+            "view_dir": str(img.parent),
+            "category": cat,
+            "type": typ,
+            "anomaly": ano,
+            "point_view": pv,
+            "view_prefix": f"{step_num:02d}-{vn_str}",
+            "stage": stage,
+        })
+
+    log(f"归档完成，共 {total} 张图片到 {out_dir}")
 
     # 7) 写描述
     desc_path = out_dir / "description.txt"
@@ -659,10 +815,48 @@ def main():
             w = csv.DictWriter(
                 fh,
                 fieldnames=["output", "source", "view_dir",
-                            "category", "type", "anomaly", "point_view", "view_prefix"],
+                            "category", "type", "anomaly", "point_view", "view_prefix", "stage"],
             )
             w.writeheader()
             w.writerows(manifest_rows)
+
+    # 8.5) 写 module.json
+    module_json = generate_module_json(
+        manifest_rows,
+        desc.strip(),
+        process_id=args.process_id or "",
+        name=args.name or "",
+    )
+    if dry_run:
+        log(f"[DRY-RUN] 将写入 module.json (process_id={module_json['process_id']})")
+    else:
+        with (out_dir / "module.json").open("w", encoding="utf-8") as fh:
+            json.dump(module_json, fh, ensure_ascii=False, indent=2)
+        log("已写入 module.json")
+
+    # ── 按 stage 拆分 manifest.json 到各子文件夹 ──
+    if not dry_run:
+        stages_seen: set[str] = {r["stage"] for r in manifest_rows}
+        for stage_name in sorted(stages_seen):
+            stage_images = [
+                img for img in module_json["images"]
+                if img["file"].startswith(f"{stage_name}/")
+            ]
+            stage_manifest = {
+                "schema_version": module_json["schema_version"],
+                "process_id": module_json["process_id"],
+                "name": module_json["name"],
+                "version": module_json["version"],
+                "images": stage_images,
+            }
+            stage_manifest_path = out_dir / stage_name / "manifest.json"
+            with stage_manifest_path.open("w", encoding="utf-8") as fh:
+                json.dump(stage_manifest, fh, ensure_ascii=False, indent=2)
+            log(f"  已写入阶段清单: {stage_name}/manifest.json ({len(stage_images)} 张)")
+    elif dry_run:
+        stages_seen = {r["stage"] for r in manifest_rows}
+        for stage_name in sorted(stages_seen):
+            log(f"[DRY-RUN] 将写入阶段清单: {stage_name}/manifest.json")
 
     # 9) 打包
     if no_zip:

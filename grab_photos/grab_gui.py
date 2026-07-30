@@ -41,6 +41,7 @@ from grab_photos.grab import (  # noqa: E402
     IMAGE_EXTS,
     PathTranslator,
     collect_images,
+    generate_module_json,
     load_config,
     resolve_dirs,
     split_multi,
@@ -155,6 +156,10 @@ class GrabGui:
         self._material_cb: ttk.Combobox | None = None
         self._config_path_var: tk.StringVar | None = None
         self._match_path_var: tk.StringVar | None = None
+        self._process_id_var: tk.StringVar | None = None
+        self._name_var: tk.StringVar | None = None
+        self._stage_var: tk.StringVar | None = None
+        self._stage_cb: ttk.Combobox | None = None
 
         # ── theme ──
         try:
@@ -938,6 +943,20 @@ class GrabGui:
             )
             self._preview_label.pack(fill=tk.BOTH, expand=True)
 
+        # Stage selector
+        stage_row = ttk.Frame(frame)
+        stage_row.pack(fill=tk.X, pady=(4, 0))
+        ttk.Label(stage_row, text="Stage:").pack(side=tk.LEFT, padx=(0, 8))
+        self._stage_var = tk.StringVar(value="raw")
+        self._stage_cb = ttk.Combobox(
+            stage_row,
+            textvariable=self._stage_var,
+            state="readonly",
+            values=["raw", "process", "finished"],
+            width=12,
+        )
+        self._stage_cb.pack(side=tk.LEFT)
+
         # Navigation buttons
         nav = ttk.Frame(frame)
         nav.pack(fill=tk.X, pady=(4, 0))
@@ -1041,6 +1060,7 @@ class GrabGui:
             "category": category,
             "anomaly": ano_display,
             "type_info": type_display,
+            "stage": self._stage_var.get().strip() if self._stage_var else "raw",
         }
 
     def _add_current_image(self) -> None:
@@ -1091,16 +1111,18 @@ class GrabGui:
         frame = ttk.LabelFrame(parent, text="已选图片列表", padding=4)
         frame.pack(fill=tk.BOTH, expand=False)
 
-        columns = ("idx", "anomaly", "dir", "type_info")
+        columns = ("idx", "anomaly", "dir", "type_info", "stage")
         self._tree = ttk.Treeview(frame, columns=columns, show="headings", height=6)
         self._tree.heading("idx", text="#")
         self._tree.heading("anomaly", text="异常类型")
         self._tree.heading("dir", text="目录 (点位-视角)")
         self._tree.heading("type_info", text="材料类型/容器类型")
+        self._tree.heading("stage", text="Stage")
         self._tree.column("idx", width=36, anchor=tk.CENTER)
-        self._tree.column("anomaly", width=130)
-        self._tree.column("dir", width=180)
-        self._tree.column("type_info", width=150)
+        self._tree.column("anomaly", width=120)
+        self._tree.column("dir", width=160)
+        self._tree.column("type_info", width=130)
+        self._tree.column("stage", width=70, anchor=tk.CENTER)
 
         vsb = ttk.Scrollbar(frame, orient=tk.VERTICAL, command=self._tree.yview)
         self._tree.configure(yscrollcommand=vsb.set)
@@ -1141,6 +1163,7 @@ class GrabGui:
                     item.get("anomaly", ""),
                     item["dir_name"],
                     item.get("type_info", ""),
+                    item.get("stage", "raw"),
                 ),
             )
         self._list_count_var.set(f"共 {len(self._image_list)} 张")
@@ -1217,6 +1240,20 @@ class GrabGui:
         )
         self._desc_text.pack(fill=tk.X, pady=(2, 4))
 
+        # module.json metadata fields
+        mod_row = ttk.Frame(frame)
+        mod_row.pack(fill=tk.X, pady=(0, 2))
+        ttk.Label(mod_row, text="Process ID:", width=14).pack(side=tk.LEFT)
+        self._process_id_var = tk.StringVar()
+        ttk.Entry(
+            mod_row, textvariable=self._process_id_var, font=("Consolas", 9), width=28
+        ).pack(side=tk.LEFT, padx=(0, 12))
+        ttk.Label(mod_row, text="流程名称:", width=10).pack(side=tk.LEFT)
+        self._name_var = tk.StringVar()
+        ttk.Entry(
+            mod_row, textvariable=self._name_var, font=("微软雅黑", 9), width=28
+        ).pack(side=tk.LEFT)
+
         row = ttk.Frame(frame)
         row.pack(fill=tk.X)
         ttk.Label(row, text="输出目录:").pack(side=tk.LEFT)
@@ -1279,6 +1316,7 @@ class GrabGui:
                         "category": row.get("category", ""),
                         "anomaly": row.get("anomaly", ""),
                         "type_info": row.get("type_info", ""),
+                        "stage": row.get("stage", "raw"),
                     })
             else:
                 messagebox.showwarning("不支持的格式", f"请选择 .json 或 .csv 文件。")
@@ -1306,6 +1344,7 @@ class GrabGui:
                 "category": item_data.get("category", ""),
                 "anomaly": item_data.get("anomaly", ""),
                 "type_info": item_data.get("type_info", ""),
+                "stage": item_data.get("stage", "raw"),
             })
             loaded += 1
 
@@ -1442,8 +1481,12 @@ class GrabGui:
             out_dir.mkdir(parents=True, exist_ok=True)
             self.root.after(0, self._log, f"输出目录: {out_dir}")
 
-            manifest_rows: list[dict] = []
-            used_names: set[str] = set()
+            # ═════════════════════════════════════════════════════════════
+            # Phase 1 — 编号命名：为每张图片确定唯一的扁平文件名
+            #            （与子文件夹无关，仅按步骤+视角编号）
+            # ═════════════════════════════════════════════════════════════
+            named_photos: list[tuple[dict, str]] = []  # (item, base_name)
+            used_flat_names: set[str] = set()
             prev_step_key: str | None = None
             step_num = 0
 
@@ -1471,51 +1514,75 @@ class GrabGui:
                     ext = src.suffix or ".png"
 
                 if vn is not None:
-                    dest_name = f"{step_num:02d}-{vn:03d}{ext}"
+                    base_name = f"{step_num:02d}-{vn:03d}{ext}"
                 else:
-                    dest_name = f"{step_num:02d}{ext}"
+                    base_name = f"{step_num:02d}{ext}"
 
-                # Collision safety
-                if dest_name in used_names:
-                    stem, dot, ext_part = dest_name.rpartition(".")
-                    ext_part = ("." + ext_part) if dot else ""
-                    if dn:
-                        hint_name = f"{stem}__{dn}{ext_part}"
+                # 碰撞安全：扁平命名空间内保证唯一
+                while base_name in used_flat_names:
+                    step_num += 1
+                    if vn is not None:
+                        base_name = f"{step_num:02d}-{vn:03d}{ext}"
                     else:
-                        hint_name = f"{stem}_2{ext_part}"
-                    if hint_name not in used_names:
-                        dest_name = hint_name
-                    else:
-                        counter = 2
-                        while f"{stem}_{counter}{ext_part}" in used_names:
-                            counter += 1
-                        dest_name = f"{stem}_{counter}{ext_part}"
-                used_names.add(dest_name)
+                        base_name = f"{step_num:02d}{ext}"
+                used_flat_names.add(base_name)
 
-                dest = out_dir / dest_name
+                named_photos.append((item, base_name))
+
+                if idx % 10 == 0 or idx == len(items):
+                    self.root.after(
+                        0, self._log,
+                        f"  已编号 {len(named_photos)}/{len(items)} ...",
+                    )
+
+            total = len(named_photos)
+            self.root.after(0, self._log, f"编号完成，共 {total} 张图片")
+
+            if total == 0:
+                self.root.after(0, self._on_pack_error, "没有成功复制任何图片")
+                return
+
+            # ═════════════════════════════════════════════════════════════
+            # Phase 2 — 归档：按 stage 分配到子文件夹，复制文件
+            #          （命名已确定，此处只负责文件夹分配与文件复制）
+            # ═════════════════════════════════════════════════════════════
+            manifest_rows: list[dict] = []
+            used_destrels: set[str] = set()
+
+            for i, (item, base_name) in enumerate(named_photos, 1):
+                src = item["path"]
+                stage = item.get("stage", "raw")
+                dest_rel = f"{stage}/{base_name}"
+
+                # 处理极端情况下的跨 stage 冲突
+                while dest_rel in used_destrels:
+                    stem, dot, ext = base_name.rpartition(".")
+                    ext = ("." + ext) if dot else ""
+                    base_name = f"{stem}_2{ext}"
+                    dest_rel = f"{stage}/{base_name}"
+                used_destrels.add(dest_rel)
+
+                dest = out_dir / dest_rel
+                dest.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(str(src), str(dest))
 
                 manifest_rows.append(
                     {
-                        "output": dest_name,
+                        "output": dest_rel,
                         "source": str(src),
                         "dir_name": item.get("dir_name", ""),
                         "category": item.get("category", ""),
                         "anomaly": item.get("anomaly", ""),
                         "type_info": item.get("type_info", ""),
+                        "stage": stage,
                     }
                 )
-                if idx % 10 == 0 or idx == len(items):
+                if i % 10 == 0 or i == total:
                     self.root.after(
-                        0, self._log, f"  已复制 {idx}/{len(items)} ..."
+                        0, self._log, f"  已归档 {i}/{total} ..."
                     )
 
-            total = len(manifest_rows)
-            self.root.after(0, self._log, f"共复制 {total} 张图片")
-
-            if total == 0:
-                self.root.after(0, self._on_pack_error, "没有成功复制任何图片")
-                return
+            self.root.after(0, self._log, f"归档完成，共 {total} 张图片")
 
             # description.txt
             desc_path = out_dir / "description.txt"
@@ -1534,7 +1601,7 @@ class GrabGui:
             csv_path = out_dir / "manifest.csv"
             with csv_path.open("w", encoding="utf-8", newline="") as fh:
                 writer = csv.DictWriter(
-                    fh, fieldnames=["output", "source", "dir_name", "category", "anomaly", "type_info"]
+                    fh, fieldnames=["output", "source", "dir_name", "category", "anomaly", "type_info", "stage"]
                 )
                 writer.writeheader()
                 writer.writerows(manifest_rows)
@@ -1552,6 +1619,7 @@ class GrabGui:
                         "category": r.get("category", ""),
                         "anomaly": r.get("anomaly", ""),
                         "type_info": r.get("type_info", ""),
+                        "stage": r.get("stage", "raw"),
                     }
                     for r in manifest_rows
                 ],
@@ -1559,6 +1627,39 @@ class GrabGui:
             with seq_path.open("w", encoding="utf-8") as fh:
                 json.dump(seq_data, fh, ensure_ascii=False, indent=2)
             self.root.after(0, self._log, f"已写入序列: {seq_path.name}")
+
+            # module.json
+            process_id = (self._process_id_var.get().strip() if self._process_id_var else "")
+            mod_name = (self._name_var.get().strip() if self._name_var else "")
+            module_json = generate_module_json(
+                manifest_rows, desc, process_id=process_id, name=mod_name
+            )
+            module_path = out_dir / "module.json"
+            with module_path.open("w", encoding="utf-8") as fh:
+                json.dump(module_json, fh, ensure_ascii=False, indent=2)
+            self.root.after(0, self._log, f"已写入模块: {module_path.name}")
+
+            # ── 按 stage 拆分 manifest.json 到各子文件夹 ──
+            stages_seen: set[str] = {r["stage"] for r in manifest_rows}
+            for stage_name in sorted(stages_seen):
+                stage_images = [
+                    img for img in module_json["images"]
+                    if img["file"].startswith(f"{stage_name}/")
+                ]
+                stage_manifest = {
+                    "schema_version": module_json["schema_version"],
+                    "process_id": module_json["process_id"],
+                    "name": module_json["name"],
+                    "version": module_json["version"],
+                    "images": stage_images,
+                }
+                stage_manifest_path = out_dir / stage_name / "manifest.json"
+                with stage_manifest_path.open("w", encoding="utf-8") as fh:
+                    json.dump(stage_manifest, fh, ensure_ascii=False, indent=2)
+                self.root.after(
+                    0, self._log,
+                    f"  已写入阶段清单: {stage_name}/manifest.json ({len(stage_images)} 张)",
+                )
 
             # Zip
             self.root.after(0, self._log, "正在打包压缩包...")

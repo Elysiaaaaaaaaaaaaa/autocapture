@@ -1,0 +1,184 @@
+{
+  "schema_version": 3,
+  "process_id": "pva_aps_pedot_pss_gel_preparation",
+  "name": "PVA/APS/PEDOT:PSS 凝胶制备",
+  "version": 4,
+  "images": [
+    {
+      "file": "01-001.png",
+      "time": "2026-07-27T13:01:01+08:00",
+      "view": "001",
+      "step": {
+        "id": "step_01_pva_empty_beaker",
+        "order": 1,
+        "name": "步骤 1 · 准备 PVA 空烧杯",
+        "operation": "在天平上放置一个干净的空烧杯，用于配制聚乙烯醇溶液。",
+        "stage": "raw",
+        "checks": [
+          "确认目标烧杯为空",
+          "检查烧杯本体及内部是否存在可见异常"
+        ],
+        "allowed_states": [
+          "烧杯为空",
+          "烧杯内部干净且无残留"
+        ],
+        "anomaly_conditions": [
+          "烧杯破损",
+          "烧杯内存在可见液体、粉末、残留或异物"
+        ],
+        "materials": []
+      }
+    },
+    {
+      "file": "01-002.png",
+      "time": "2026-07-27T13:01:02+08:00",
+      "view": "002",
+      "step": {
+        "id": "step_01_pva_empty_beaker",
+        "order": 1,
+        "name": "步骤 1 · 准备 PVA 空烧杯",
+        "operation": "在天平上放置一个干净的空烧杯，用于配制聚乙烯醇溶液。",
+        "stage": "raw",
+        "checks": [
+          "确认目标烧杯为空",
+          "检查烧杯本体及内部是否存在可见异常"
+        ],
+        "allowed_states": [
+          "烧杯为空",
+          "烧杯内部干净且无残留"
+        ],
+        "anomaly_conditions": [
+          "烧杯破损",
+          "烧杯内存在可见液体、粉末、残留或异物"
+        ],
+        "materials": []
+      }
+    },
+    {
+      "file": "01-003.png",
+      "time": "2026-07-27T13:01:03+08:00",
+      "view": "003",
+      "step": {
+        "id": "step_01_pva_empty_beaker",
+        "order": 1,
+        "name": "步骤 1 · 准备 PVA 空烧杯",
+        "operation": "在天平上放置一个干净的空烧杯，用于配制聚乙烯醇溶液。",
+        "stage": "raw",
+        "checks": [
+          "确认目标烧杯为空",
+          "检查烧杯本体及内部是否存在可见异常"
+        ],
+        "allowed_states": [
+          "烧杯为空",
+          "烧杯内部干净且无残留"
+        ],
+        "anomaly_conditions": [
+          "烧杯破损",
+          "烧杯内存在可见液体、粉末、残留或异物"
+        ],
+        "materials": []
+      }
+    },
+    {
+      "file": "10-001.png",
+      "time": "2026-07-27T13:10:01+08:00",
+      "view": "001",
+      "step": {
+        "id": "step_10_aps_empty_beaker",
+        "order": 10,
+        "name": "步骤 10 · 准备 APS 空烧杯",
+        "operation": "在天平上放置另一个干净的空烧杯，用于配制过硫酸铵溶液。",
+        "stage": "raw",
+        "checks": [
+          "确认目标烧杯为空",
+          "检查烧杯本体及内部是否存在可见异常"
+        ],
+        "allowed_states": [
+          "烧杯为空",
+          "烧杯内部干净且无残留"
+        ],
+        "anomaly_conditions": [
+          "烧杯破损",
+          "烧杯内存在可见液体、粉末、残留或异物"
+        ],
+        "materials": []
+      }
+    },
+    {
+      "file": "10-002.png",
+      "time": "2026-07-27T13:10:02+08:00",
+      "view": "002",
+      "step": {
+        "id": "step_10_aps_empty_beaker",
+        "order": 10,
+        "name": "步骤 10 · 准备 APS 空烧杯",
+        "operation": "在天平上放置另一个干净的空烧杯，用于配制过硫酸铵溶液。",
+        "stage": "raw",
+        "checks": [
+          "确认目标烧杯为空",
+          "检查烧杯本体及内部是否存在可见异常"
+        ],
+        "allowed_states": [
+          "烧杯为空",
+          "烧杯内部干净且无残留"
+        ],
+        "anomaly_conditions": [
+          "烧杯破损",
+          "烧杯内存在可见液体、粉末、残留或异物"
+        ],
+        "materials": []
+      }
+    },
+    {
+      "file": "10-003.png",
+      "time": "2026-07-27T13:10:03+08:00",
+      "view": "003",
+      "step": {
+        "id": "step_10_aps_empty_beaker",
+        "order": 10,
+        "name": "步骤 10 · 准备 APS 空烧杯",
+        "operation": "在天平上放置另一个干净的空烧杯，用于配制过硫酸铵溶液。",
+        "stage": "raw",
+        "checks": [
+          "确认目标烧杯为空",
+          "检查烧杯本体及内部是否存在可见异常"
+        ],
+        "allowed_states": [
+          "烧杯为空",
+          "烧杯内部干净且无残留"
+        ],
+        "anomaly_conditions": [
+          "烧杯破损",
+          "烧杯内存在可见液体、粉末、残留或异物"
+        ],
+        "materials": []
+      }
+    },
+    {
+      "file": "20-001.png",
+      "time": "2026-07-27T13:20:01+08:00",
+      "view": "001",
+      "step": {
+        "id": "step_20_empty_six_well_plate_ready",
+        "order": 20,
+        "name": "步骤 20 · 准备六孔板",
+        "operation": "在移液站准备干净的空六孔板，用于接收三种溶液。",
+        "stage": "raw",
+        "checks": [
+          "确认目标六孔板的孔位为空",
+          "检查六孔板本体及各孔内部是否存在可见异常"
+        ],
+        "allowed_states": [
+          "六个孔位均为空",
+          "各孔内部干净且无残留"
+        ],
+        "anomaly_conditions": [
+          "六孔板破损",
+          "孔内存在可见液体、粉末、残留或异物",
+          "孔位数量或目标容器不符合要求"
+        ],
+        "materials": []
+      }
+    }
+  ]
+}

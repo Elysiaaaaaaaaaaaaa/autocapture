@@ -216,6 +216,7 @@ SHOOTING_POINTS: dict[str, str] = {
     "soft_bottle_slot_03": "软胶瓶槽3",
     "soft_bottle_slot_04": "软胶瓶槽4",
     "soft_bottle_slot_05": "软胶瓶槽5",
+    "shaker": "摇床",
 }
 
 SHOOTING_POINTS_CN: dict[str, str] = {v: k for k, v in SHOOTING_POINTS.items()}

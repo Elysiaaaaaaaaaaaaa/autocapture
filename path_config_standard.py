@@ -88,6 +88,7 @@ SHOOTING_POINTS: dict[str, str] = {
     "stack3": "堆栈3",
     "tianping": "天平",
     "zhuanyi": "转移",
+    "shaker": "摇床",
 }
 
 # 反向映射：中文 → 英文（供 GUI 下拉框使用）
