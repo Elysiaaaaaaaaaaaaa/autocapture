@@ -160,7 +160,7 @@ class GrabGui:
         self._templates: dict[str, dict] = {}    # stem → {name, steps: [{order, name, operation, stage, checks, …}]}
         self._active_template: dict | None = None  # currently selected template (the full dict)
         self._active_template_stem: str = ""       # stem of active template
-        self._load_templates()
+        self._load_templates_from_disk()
 
         # ── param widgets (rebuilt on category switch) ──
         self._param_frame: ttk.Frame | None = None
@@ -303,6 +303,566 @@ class GrabGui:
         self._clear_preview()
         self._current_images = []
         self._current_index = 0
+
+    # ── template section ─────────────────────────────────────────────────
+
+    def _build_template_section(self, parent: ttk.Frame) -> None:
+        """Template selector: choose an experiment template for auto-filling checks."""
+        frame = ttk.Frame(parent)
+        frame.pack(fill=tk.X)
+
+        ttk.Label(frame, text="实验模板:").pack(side=tk.LEFT, padx=(0, 8))
+        self._template_var = tk.StringVar()
+        self._template_cb = ttk.Combobox(
+            frame,
+            textvariable=self._template_var,
+            state="readonly",
+            width=48,
+        )
+        self._template_cb.pack(side=tk.LEFT, padx=(0, 8))
+        self._template_cb.bind("<<ComboboxSelected>>", self._on_template_select)
+        ttk.Button(
+            frame, text="管理模板", command=self._on_manage_templates
+        ).pack(side=tk.LEFT, padx=(0, 8))
+        self._template_info_var = tk.StringVar()
+        ttk.Label(
+            frame, textvariable=self._template_info_var, foreground="gray", font=("微软雅黑", 8)
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        self._refresh_template_list()
+
+    # ── template loading ─────────────────────────────────────────────────
+
+    def _load_templates_from_disk(self) -> None:
+        """Scan the templates directory and load all valid template files into memory."""
+        self._templates = {}
+        if self._templates_dir.is_dir():
+            for f in sorted(self._templates_dir.glob("*.json")):
+                try:
+                    data = json.loads(f.read_text(encoding="utf-8"))
+                    if isinstance(data.get("steps"), list):
+                        self._templates[f.stem] = data
+                except Exception:
+                    pass
+
+    def _refresh_template_list(self) -> None:
+        """Reload templates from disk and update the dropdown UI."""
+        self._load_templates_from_disk()
+
+        stems = sorted(self._templates.keys())
+        names = [self._templates[s].get("name", s) for s in stems]
+        self._template_cb["values"] = names  # type: ignore[index]
+
+        if self._active_template_stem in self._templates:
+            idx = stems.index(self._active_template_stem)
+            self._template_var.set(names[idx])
+            self._active_template = self._templates[self._active_template_stem]
+        elif stems:
+            self._template_cb.current(0)
+            self._template_var.set(names[0])
+            self._active_template_stem = stems[0]
+            self._active_template = self._templates[stems[0]]
+        else:
+            self._template_var.set("")
+            self._active_template = None
+            self._active_template_stem = ""
+
+        self._update_template_info()
+
+    def _update_template_info(self) -> None:
+        """Show step count for the active template."""
+        if self._active_template:
+            n = len(self._active_template.get("steps", []))
+            self._template_info_var.set(f"({n} 个步骤)")
+        else:
+            self._template_info_var.set("(无模板 — 检查项需手动填写)")
+
+    def _on_template_select(self, _event=None) -> None:
+        """User picked a template from the dropdown."""
+        sel = self._template_var.get()
+        for stem, data in self._templates.items():
+            if data.get("name", stem) == sel:
+                self._active_template_stem = stem
+                self._active_template = data
+                self._update_template_info()
+                if data.get("steps"):
+                    self._log(f"已选择模板: {data.get('name', stem)} ({len(data['steps'])} 个步骤)")
+                return
+
+    def _get_step_checks(self, step_order: int) -> dict:
+        """Look up checks/allowed_states/anomaly_conditions/materials for a step number."""
+        empty = {"checks": [], "allowed_states": [], "anomaly_conditions": [], "materials": []}
+        if not self._active_template:
+            return empty
+        for step in self._active_template.get("steps", []):
+            if step.get("order") == step_order:
+                return {
+                    "checks": list(step.get("checks", [])),
+                    "allowed_states": list(step.get("allowed_states", [])),
+                    "anomaly_conditions": list(step.get("anomaly_conditions", [])),
+                    "materials": list(step.get("materials", [])),
+                }
+        return empty
+
+    # ── template management dialogs ──────────────────────────────────────
+
+    def _on_manage_templates(self) -> None:
+        """Open the template management dialog."""
+        dialog = tk.Toplevel(self.root)
+        dialog.title("模板管理")
+        dialog.geometry("580x460")
+        dialog.minsize(480, 360)
+        dialog.transient(self.root)
+        dialog.grab_set()
+
+        # ── template list ──
+        list_frame = ttk.LabelFrame(dialog, text="已有模板", padding=6)
+        list_frame.pack(fill=tk.BOTH, expand=True, padx=8, pady=(8, 0))
+
+        columns = ("name", "steps", "file")
+        tree = ttk.Treeview(list_frame, columns=columns, show="headings", height=10)
+        tree.heading("name", text="模板名称")
+        tree.heading("steps", text="步骤数")
+        tree.heading("file", text="文件名")
+        tree.column("name", width=260)
+        tree.column("steps", width=70, anchor=tk.CENTER)
+        tree.column("file", width=140)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        vsb = ttk.Scrollbar(list_frame, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        def _refresh_tree() -> None:
+            for row in tree.get_children():
+                tree.delete(row)
+            for stem in sorted(self._templates.keys()):
+                tpl = self._templates[stem]
+                tree.insert("", tk.END, values=(
+                    tpl.get("name", stem),
+                    len(tpl.get("steps", [])),
+                    f"{stem}.json",
+                ))
+
+        _refresh_tree()
+
+        # ── action buttons ──
+        btn_frame = ttk.Frame(dialog, padding=8)
+        btn_frame.pack(fill=tk.X)
+
+        def _get_selected_stem() -> str | None:
+            sel = tree.selection()
+            if not sel:
+                messagebox.showwarning("未选中", "请先在列表中选择一个模板。")
+                return None
+            idx = tree.index(sel[0])
+            stems = sorted(self._templates.keys())
+            if idx < 0 or idx >= len(stems):
+                return None
+            return stems[idx]
+
+        def _new() -> None:
+            stem = self._on_new_template(dialog)
+            if stem:
+                _refresh_tree()
+                self._refresh_template_list()
+
+        def _edit() -> None:
+            stem = _get_selected_stem()
+            if stem:
+                self._open_template_editor(dialog, stem)
+                _refresh_tree()
+                self._refresh_template_list()
+
+        def _import() -> None:
+            stem = self._on_import_template(dialog)
+            if stem:
+                _refresh_tree()
+                self._refresh_template_list()
+
+        def _delete() -> None:
+            stem = _get_selected_stem()
+            if stem is None:
+                return
+            name = self._templates[stem].get("name", stem)
+            if messagebox.askyesno("确认删除", f"确定要删除模板「{name}」吗？\n此操作不可恢复。"):
+                tpl_path = self._templates_dir / f"{stem}.json"
+                try:
+                    tpl_path.unlink()
+                except Exception as exc:
+                    messagebox.showerror("删除失败", str(exc))
+                    return
+                if self._active_template_stem == stem:
+                    self._active_template = None
+                    self._active_template_stem = ""
+                _refresh_tree()
+                self._refresh_template_list()
+                self._log(f"已删除模板: {name}")
+
+        ttk.Button(btn_frame, text="新建", command=_new).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="编辑", command=_edit).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="从 manifest 导入", command=_import).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="删除", command=_delete).pack(side=tk.LEFT, padx=(0, 8))
+        ttk.Button(btn_frame, text="关闭", command=dialog.destroy).pack(side=tk.RIGHT)
+
+        # Double-click to edit
+        tree.bind("<Double-1>", lambda _e: _edit())
+
+    def _on_new_template(self, parent: tk.Toplevel | None = None) -> str | None:
+        """Prompt for a template name and create a blank template."""
+        dlg = tk.Toplevel(parent or self.root)
+        dlg.title("新建模板")
+        dlg.geometry("400x140")
+        dlg.transient(parent or self.root)
+        dlg.grab_set()
+
+        ttk.Label(dlg, text="模板名称:", font=("微软雅黑", 10)).pack(padx=16, pady=(16, 4))
+        name_var = tk.StringVar()
+        name_entry = ttk.Entry(dlg, textvariable=name_var, font=("微软雅黑", 10), width=40)
+        name_entry.pack(padx=16, pady=(0, 4))
+        name_entry.focus_set()
+
+        result: list[str | None] = [None]
+
+        def _ok() -> None:
+            name = name_var.get().strip()
+            if not name:
+                messagebox.showwarning("名称不能为空", "请输入模板名称。")
+                return
+            import re
+            stem = re.sub(r'[\\/:*?"<>|]+', '_', name)
+            stem = re.sub(r'\s+', '_', stem).strip('_') or "untitled"
+            tpl = {"name": name, "steps": []}
+            tpl_path = self._templates_dir / f"{stem}.json"
+            if tpl_path.exists():
+                messagebox.showwarning("已存在", f"模板 '{stem}.json' 已存在，请换一个名称。")
+                return
+            try:
+                self._templates_dir.mkdir(parents=True, exist_ok=True)
+                tpl_path.write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as exc:
+                messagebox.showerror("保存失败", str(exc))
+                return
+            result[0] = stem
+            dlg.destroy()
+
+        ttk.Button(dlg, text="确定", command=_ok).pack(side=tk.LEFT, padx=(120, 12), pady=8)
+        ttk.Button(dlg, text="取消", command=dlg.destroy).pack(side=tk.LEFT)
+        dlg.bind("<Return>", lambda _e: _ok())
+
+        dlg.wait_window()
+        if result[0]:
+            self._log(f"已创建空白模板: {name_var.get().strip()}")
+        return result[0]
+
+    def _on_import_template(self, parent: tk.Toplevel | None = None) -> str | None:
+        """Import a manifest.json as a new template."""
+        path_str = filedialog.askopenfilename(
+            title="选择 manifest.json",
+            filetypes=[("manifest.json", "manifest.json"), ("JSON 文件", "*.json"), ("所有文件", "*.*")],
+        )
+        if not path_str:
+            return None
+        manifest_path = Path(path_str)
+        try:
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            messagebox.showerror("解析失败", f"无法解析:\n{exc}")
+            return None
+
+        images = data.get("images")
+        if not isinstance(images, list):
+            messagebox.showwarning("格式不符", "该文件不包含 'images' 数组。")
+            return None
+
+        # Extract unique steps
+        seen: dict[int, dict] = {}
+        for img in images:
+            step = img.get("step", {})
+            order = step.get("order")
+            if order is None or order in seen:
+                continue
+            seen[order] = {
+                "order": order,
+                "name": step.get("name", f"步骤 {order}"),
+                "operation": step.get("operation", ""),
+                "stage": step.get("stage", "raw"),
+                "checks": step.get("checks", []),
+                "allowed_states": step.get("allowed_states", []),
+                "anomaly_conditions": step.get("anomaly_conditions", []),
+                "materials": step.get("materials", []),
+            }
+
+        if not seen:
+            messagebox.showwarning("无步骤", "manifest.json 中没有找到步骤定义。")
+            return None
+
+        steps = [seen[k] for k in sorted(seen.keys())]
+        name = data.get("name", manifest_path.parent.name)
+
+        import re
+        stem = re.sub(r'[\\/:*?"<>|]+', '_', name)
+        stem = re.sub(r'\s+', '_', stem).strip('_') or manifest_path.parent.name
+        tpl_path = self._templates_dir / f"{stem}.json"
+        if tpl_path.exists():
+            if not messagebox.askyesno("覆盖确认", f"模板 '{stem}.json' 已存在，是否覆盖？"):
+                return None
+
+        tpl = {"name": name, "steps": steps}
+        try:
+            self._templates_dir.mkdir(parents=True, exist_ok=True)
+            tpl_path.write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception as exc:
+            messagebox.showerror("保存失败", str(exc))
+            return None
+
+        self._log(f"已从 manifest 导入模板: {name} ({len(steps)} 个步骤)")
+        return stem
+
+    def _open_template_editor(self, parent: tk.Toplevel, stem: str) -> None:
+        """Open a step-by-step editor for a template."""
+        tpl = self._templates.get(stem)
+        if tpl is None:
+            return
+        import copy
+        tpl = copy.deepcopy(tpl)
+        steps: list[dict] = tpl.get("steps", [])
+
+        editor = tk.Toplevel(parent)
+        editor.title(f"编辑模板 — {tpl.get('name', stem)}")
+        editor.geometry("820x620")
+        editor.minsize(680, 480)
+        editor.transient(parent)
+        editor.grab_set()
+
+        # ── top: template name ──
+        top = ttk.Frame(editor, padding=8)
+        top.pack(fill=tk.X)
+        ttk.Label(top, text="模板名称:").pack(side=tk.LEFT, padx=(0, 8))
+        name_var = tk.StringVar(value=tpl.get("name", ""))
+        ttk.Entry(top, textvariable=name_var, font=("微软雅黑", 10), width=50).pack(side=tk.LEFT)
+
+        # ── middle: step list + detail ──
+        main = ttk.Frame(editor, padding=4)
+        main.pack(fill=tk.BOTH, expand=True)
+
+        # Left: step list
+        left = ttk.Frame(main, width=280)
+        left.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 4))
+        left.pack_propagate(False)
+
+        tree_cols = ("order", "stage", "checks")
+        tree = ttk.Treeview(left, columns=tree_cols, show="headings", height=14)
+        tree.heading("order", text="#")
+        tree.heading("stage", text="Stage")
+        tree.heading("checks", text="检查项")
+        tree.column("order", width=30, anchor=tk.CENTER)
+        tree.column("stage", width=60, anchor=tk.CENTER)
+        tree.column("checks", width=160)
+        tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        vsb = ttk.Scrollbar(left, orient=tk.VERTICAL, command=tree.yview)
+        tree.configure(yscrollcommand=vsb.set)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        step_btns = ttk.Frame(left)
+        step_btns.pack(fill=tk.X, pady=(4, 0))
+        ttk.Button(step_btns, text="+ 添加步骤", command=lambda: _add_step()).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(step_btns, text="− 删除", command=lambda: _del_step()).pack(side=tk.LEFT, padx=(0, 4))
+        ttk.Button(step_btns, text="↑", command=lambda: _move_step(-1)).pack(side=tk.LEFT, padx=(0, 2))
+        ttk.Button(step_btns, text="↓", command=lambda: _move_step(1)).pack(side=tk.LEFT)
+
+        # Right: step detail form
+        right = ttk.Frame(main)
+        right.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        row0 = ttk.Frame(right)
+        row0.pack(fill=tk.X, pady=1)
+        ttk.Label(row0, text="步骤编号:").pack(side=tk.LEFT)
+        order_var = tk.StringVar()
+        ttk.Entry(row0, textvariable=order_var, width=6).pack(side=tk.LEFT, padx=(4, 16))
+
+        ttk.Label(row0, text="Stage:").pack(side=tk.LEFT)
+        stage_var = tk.StringVar(value="raw")
+        stage_cb = ttk.Combobox(row0, textvariable=stage_var, state="readonly",
+                                values=["raw", "process", "finished"], width=10)
+        stage_cb.pack(side=tk.LEFT)
+
+        row1 = ttk.Frame(right)
+        row1.pack(fill=tk.X, pady=2)
+        ttk.Label(row1, text="步骤名称:").pack(anchor=tk.W)
+        name_step_var = tk.StringVar()
+        ttk.Entry(row1, textvariable=name_step_var, font=("微软雅黑", 9)).pack(fill=tk.X)
+
+        row1b = ttk.Frame(right)
+        row1b.pack(fill=tk.X, pady=2)
+        ttk.Label(row1b, text="操作描述:").pack(anchor=tk.W)
+        op_var = tk.StringVar()
+        ttk.Entry(row1b, textvariable=op_var, font=("微软雅黑", 9)).pack(fill=tk.X)
+
+        # Checks
+        checks_frame = ttk.LabelFrame(right, text="检查项 (每行一条)", padding=4)
+        checks_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        checks_text = tk.Text(checks_frame, height=6, font=("微软雅黑", 9), wrap=tk.WORD)
+        checks_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        checks_sb = ttk.Scrollbar(checks_frame, orient=tk.VERTICAL, command=checks_text.yview)
+        checks_text.configure(yscrollcommand=checks_sb.set)
+        checks_sb.pack(side=tk.RIGHT, fill=tk.Y)
+
+        # Allowed states
+        allowed_frame = ttk.LabelFrame(right, text="允许状态 (每行一条)", padding=4)
+        allowed_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        allowed_text = tk.Text(allowed_frame, height=3, font=("微软雅黑", 9), wrap=tk.WORD)
+        allowed_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Anomaly conditions
+        anom_frame = ttk.LabelFrame(right, text="异常条件 (每行一条)", padding=4)
+        anom_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        anom_text = tk.Text(anom_frame, height=3, font=("微软雅黑", 9), wrap=tk.WORD)
+        anom_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # Materials
+        mat_frame = ttk.LabelFrame(right, text="材料 (每行一种)", padding=4)
+        mat_frame.pack(fill=tk.BOTH, expand=True, pady=(4, 0))
+        mat_text = tk.Text(mat_frame, height=2, font=("微软雅黑", 9), wrap=tk.WORD)
+        mat_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        # ── helper functions ──
+
+        def _refresh_tree() -> None:
+            for row in tree.get_children():
+                tree.delete(row)
+            for s in steps:
+                n_checks = len(s.get("checks", []))
+                tree.insert("", tk.END, values=(
+                    str(s.get("order", "?")),
+                    s.get("stage", "raw"),
+                    f"{n_checks} 条" if n_checks else "—",
+                ))
+
+        def _show_step(idx: int) -> None:
+            if 0 <= idx < len(steps):
+                s = steps[idx]
+                order_var.set(str(s.get("order", idx + 1)))
+                stage_var.set(s.get("stage", "raw"))
+                name_step_var.set(s.get("name", ""))
+                op_var.set(s.get("operation", ""))
+                checks_text.delete("1.0", tk.END)
+                checks_text.insert("1.0", "\n".join(s.get("checks", [])))
+                allowed_text.delete("1.0", tk.END)
+                allowed_text.insert("1.0", "\n".join(s.get("allowed_states", [])))
+                anom_text.delete("1.0", tk.END)
+                anom_text.insert("1.0", "\n".join(s.get("anomaly_conditions", [])))
+                mat_text.delete("1.0", tk.END)
+                mat_text.insert("1.0", "\n".join(s.get("materials", [])))
+
+        def _save_current() -> None:
+            sel = tree.selection()
+            if not sel:
+                return
+            idx = tree.index(sel[0])
+            if 0 <= idx < len(steps):
+                s = steps[idx]
+                try:
+                    s["order"] = int(order_var.get().strip())
+                except ValueError:
+                    s["order"] = idx + 1
+                s["stage"] = stage_var.get()
+                s["name"] = name_step_var.get().strip()
+                s["operation"] = op_var.get().strip()
+                s["checks"] = [ln.strip() for ln in checks_text.get("1.0", tk.END).splitlines() if ln.strip()]
+                s["allowed_states"] = [ln.strip() for ln in allowed_text.get("1.0", tk.END).splitlines() if ln.strip()]
+                s["anomaly_conditions"] = [ln.strip() for ln in anom_text.get("1.0", tk.END).splitlines() if ln.strip()]
+                s["materials"] = [ln.strip() for ln in mat_text.get("1.0", tk.END).splitlines() if ln.strip()]
+                _refresh_tree()
+                # Re-select
+                children = tree.get_children()
+                if idx < len(children):
+                    tree.selection_set(children[idx])
+
+        def _on_tree_select(_event=None) -> None:
+            _save_current()
+            sel = tree.selection()
+            if sel:
+                _show_step(tree.index(sel[0]))
+
+        tree.bind("<<TreeviewSelect>>", _on_tree_select)
+
+        def _add_step() -> None:
+            _save_current()
+            new_order = max((s.get("order", 0) for s in steps), default=0) + 1
+            steps.append({
+                "order": new_order,
+                "name": f"步骤 {new_order}",
+                "operation": "",
+                "stage": "process",
+                "checks": [],
+                "allowed_states": [],
+                "anomaly_conditions": [],
+                "materials": [],
+            })
+            _refresh_tree()
+            children = tree.get_children()
+            tree.selection_set(children[-1])
+            _show_step(len(steps) - 1)
+
+        def _del_step() -> None:
+            sel = tree.selection()
+            if not sel:
+                return
+            idx = tree.index(sel[0])
+            if 0 <= idx < len(steps) and messagebox.askyesno("确认删除", f"删除步骤 {steps[idx].get('order', '?')}？"):
+                del steps[idx]
+                _refresh_tree()
+                if steps:
+                    children = tree.get_children()
+                    new_idx = min(idx, len(children) - 1)
+                    tree.selection_set(children[new_idx])
+                    _show_step(new_idx)
+
+        def _move_step(delta: int) -> None:
+            sel = tree.selection()
+            if not sel:
+                return
+            idx = tree.index(sel[0])
+            new_idx = idx + delta
+            if 0 <= new_idx < len(steps):
+                steps[idx], steps[new_idx] = steps[new_idx], steps[idx]
+                _refresh_tree()
+                children = tree.get_children()
+                tree.selection_set(children[new_idx])
+
+        # ── bottom buttons ──
+        bottom = ttk.Frame(editor, padding=8)
+        bottom.pack(fill=tk.X)
+
+        def _save_template() -> None:
+            _save_current()
+            tpl["name"] = name_var.get().strip() or tpl.get("name", stem)
+            tpl["steps"] = steps
+            tpl_path = self._templates_dir / f"{stem}.json"
+            try:
+                self._templates_dir.mkdir(parents=True, exist_ok=True)
+                tpl_path.write_text(json.dumps(tpl, ensure_ascii=False, indent=2), encoding="utf-8")
+            except Exception as exc:
+                messagebox.showerror("保存失败", str(exc))
+                return
+            # Update in-memory
+            self._templates[stem] = tpl
+            if self._active_template_stem == stem:
+                self._active_template = tpl
+                self._update_template_info()
+            self._log(f"已保存模板: {tpl['name']} ({len(steps)} 个步骤)")
+            editor.destroy()
+
+        ttk.Button(bottom, text="保存", command=_save_template).pack(side=tk.RIGHT, padx=(8, 0))
+        ttk.Button(bottom, text="取消", command=editor.destroy).pack(side=tk.RIGHT)
+
+        # Initial population
+        _refresh_tree()
+        if steps:
+            children = tree.get_children()
+            tree.selection_set(children[0])
+            _show_step(0)
 
     # ── dataset root ────────────────────────────────────────────────────
 
@@ -1094,12 +1654,12 @@ class GrabGui:
             "materials": [],
         }
 
-        # Pre-fill checks from reference manifest based on predicted step number
-        if self._ref_step_checks:
+        # Pre-fill checks from experiment template based on predicted step number
+        if self._active_template:
             predicted = self._predict_step_number(item)
-            tpl = self._ref_step_checks.get(predicted)
-            if tpl is not None:
-                item["checks"] = list(tpl.get("checks", []))
+            tpl = self._get_step_checks(predicted)
+            if tpl.get("checks"):
+                item["checks"] = list(tpl["checks"])
                 item["allowed_states"] = list(tpl.get("allowed_states", []))
                 item["anomaly_conditions"] = list(tpl.get("anomaly_conditions", []))
                 item["materials"] = list(tpl.get("materials", []))
@@ -1116,7 +1676,7 @@ class GrabGui:
         self._image_list.append(item)
         self._refresh_treeview()
         self._pack_btn["state"] = tk.NORMAL
-        predicted = self._predict_step_number(item) if self._ref_step_checks else None
+        predicted = self._predict_step_number(item) if self._active_template else None
         extra = ""
         if predicted is not None and item.get("checks"):
             extra = f"  (步骤 {predicted}, 已自动填充 {len(item['checks'])} 条检查项)"
@@ -1146,7 +1706,7 @@ class GrabGui:
         children = self._tree.get_children()
         if insert_idx < len(children):
             self._tree.selection_set(children[insert_idx])
-        predicted = self._predict_step_number(item) if self._ref_step_checks else None
+        predicted = self._predict_step_number(item) if self._active_template else None
         extra = ""
         if predicted is not None and item.get("checks"):
             extra = f"  (步骤 {predicted}, 已自动填充 {len(item['checks'])} 条检查项)"
@@ -1341,31 +1901,6 @@ class GrabGui:
             step_num += 1
 
         return step_num
-
-    @staticmethod
-    def _extract_step_checks_from_manifest(manifest: dict) -> dict[int, dict]:
-        """Extract a ``{step_order: {checks, ...}}`` mapping from a manifest.json dict.
-
-        Only the first non-empty entry for each step order is kept.
-        """
-        result: dict[int, dict] = {}
-        for img in manifest.get("images", []):
-            step = img.get("step", {})
-            order = step.get("order")
-            if order is None or order in result:
-                continue
-            checks = step.get("checks", [])
-            allowed = step.get("allowed_states", [])
-            anomaly = step.get("anomaly_conditions", [])
-            materials = step.get("materials", [])
-            if any([checks, allowed, anomaly, materials]):
-                result[order] = {
-                    "checks": list(checks),
-                    "allowed_states": list(allowed),
-                    "anomaly_conditions": list(anomaly),
-                    "materials": list(materials),
-                }
-        return result
 
     @staticmethod
     def _checks_summary(item: dict) -> str:
@@ -1644,57 +2179,6 @@ class GrabGui:
             self._name_var.set("")
         self._log("已清除描述文件")
 
-    # ── reference manifest (checks template) ────────────────────────────
-
-    def _on_load_reference_manifest(self) -> None:
-        """Open a file dialog to load a manifest.json as a checks template.
-
-        Extracts ``{step_order: {checks, ...}}`` so that subsequently added
-        images get default checks based on their predicted step number.
-        """
-        path_str = filedialog.askopenfilename(
-            title="加载参考 manifest.json",
-            filetypes=[
-                ("manifest.json", "manifest.json"),
-                ("JSON 文件", "*.json"),
-                ("所有文件", "*.*"),
-            ],
-        )
-        if not path_str:
-            return
-        self._set_reference_manifest(Path(path_str))
-
-    def _set_reference_manifest(self, file_path: Path) -> None:
-        """Parse *file_path* as a manifest.json and store step→checks mapping."""
-        if not file_path.is_file():
-            messagebox.showwarning("文件不存在", f"找不到:\n{file_path}")
-            return
-        try:
-            data = json.loads(file_path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            messagebox.showerror("解析失败", f"无法解析 manifest.json:\n{exc}")
-            return
-
-        # Detect format: manifest.json has "images" with "step" objects
-        images = data.get("images")
-        if not isinstance(images, list):
-            messagebox.showwarning("格式不符", "该 JSON 文件不包含 'images' 数组，不是有效的 manifest.json。")
-            return
-
-        extracted = self._extract_step_checks_from_manifest(data)
-        if not extracted:
-            messagebox.showwarning("无检查项", "manifest.json 中各步骤均未定义 checks，没有可导入的默认值。")
-            return
-
-        self._ref_step_checks = extracted
-        self._ref_manifest_path = file_path
-        steps_str = ",".join(str(o) for o in sorted(extracted))
-        self._ref_status_var.set(f"参考: {file_path.name} (步骤 {steps_str})")
-        self._log(
-            f"已加载参考 manifest: {file_path.name}  "
-            f"({len(extracted)} 个步骤有检查项定义，步骤: {steps_str})"
-        )
-
     # ── sequence load / save ────────────────────────────────────────────
 
     def _on_load_sequence(self) -> None:
@@ -1713,15 +2197,7 @@ class GrabGui:
         self._load_sequence_from_file(Path(path_str))
 
     def _load_sequence_from_file(self, file_path: Path) -> None:
-        """从 JSON 或 CSV 文件加载图片序列到列表中。
-
-        支持三种格式：
-
-        1. **sequence.json** — ``{"items": [{source, dir_name, ...}]}``
-        2. **CSV** — 列: source, dir_name, category, anomaly, type_info, stage, checks, …
-        3. **manifest.json** — ``{"images": [{file, step: {order, checks, …}}]}``
-           图片路径从 manifest 所在目录的相对路径解析。
-        """
+        """从 JSON (sequence.json) 或 CSV 文件加载图片序列到列表中。"""
         if not file_path.is_file():
             messagebox.showwarning("文件不存在", f"序列文件不存在:\n{file_path}")
             return
@@ -1732,24 +2208,8 @@ class GrabGui:
             raw = file_path.read_text(encoding="utf-8")
             if file_path.suffix.lower() == ".json":
                 data = json.loads(raw)
-
-                # ── detect manifest.json format ──
-                if "images" in data and isinstance(data.get("images"), list):
-                    items_data, desc = self._parse_manifest_json(data, file_path)
-                    # Also set as reference for future image additions
-                    self._ref_step_checks = self._extract_step_checks_from_manifest(data)
-                    self._ref_manifest_path = file_path
-                    extracted = self._ref_step_checks
-                    if extracted:
-                        steps_str = ",".join(str(o) for o in sorted(extracted))
-                        self._ref_status_var.set(f"参考: {file_path.name} (步骤 {steps_str})")
-                else:
-                    # ── sequence.json format ──
-                    desc = data.get("description", "")
-                    items_data = data.get("items", [])
-                    # Also extract step→checks from loaded items as reference
-                    self._extract_ref_from_items(items_data)
-
+                desc = data.get("description", "")
+                items_data = data.get("items", [])
             elif file_path.suffix.lower() == ".csv":
                 import io
                 reader = csv.DictReader(io.StringIO(raw))
@@ -1812,101 +2272,6 @@ class GrabGui:
             f"(成功 {loaded} 张, 跳过 {skipped} 张)"
         )
 
-    @staticmethod
-    def _parse_manifest_json(data: dict, manifest_path: Path) -> tuple[list[dict], str]:
-        """Convert manifest.json ``images`` array to sequence-item dicts.
-
-        Resolves each image's ``file`` path relative to *manifest_path*'s
-        parent directory (the grabbed output folder).
-        """
-        items: list[dict] = []
-        desc_parts: list[str] = []
-        seen_steps: dict[int, str] = {}  # order → name
-        base_dir = manifest_path.parent  # e.g. grabbed/xxx/
-
-        for img in data.get("images", []):
-            rel_file = img.get("file", "")
-            step = img.get("step", {})
-            order = step.get("order", 0)
-            step_name = step.get("name", "")
-
-            # Collect description lines from unique steps
-            if order and order not in seen_steps:
-                seen_steps[order] = step_name
-                operation = step.get("operation", "")
-                desc_parts.append(f"{order}.{operation}")
-
-            # Resolve source path relative to the manifest's parent directory.
-            # Works for both root manifest (file="raw/01-001.png")
-            # and per-stage manifest (file="01-001.png").
-            src = base_dir / rel_file
-
-            items.append({
-                "source": str(src),
-                "dir_name": src.parent.name if src.is_file() else Path(rel_file).parent.name,
-                "category": "",
-                "anomaly": "",
-                "type_info": "",
-                "stage": step.get("stage", img.get("file", "").split("/")[0] if "/" in img.get("file", "") else "raw"),
-                "checks": step.get("checks", []),
-                "allowed_states": step.get("allowed_states", []),
-                "anomaly_conditions": step.get("anomaly_conditions", []),
-                "materials": step.get("materials", []),
-            })
-
-        desc = "\n".join(desc_parts)
-        return items, desc
-
-    def _extract_ref_from_items(self, items_data: list[dict]) -> None:
-        """Extract step→checks reference from loaded sequence items.
-
-        Simulates the step-numbering logic on the loaded items to map each
-        step order to its checks, then stores it in ``_ref_step_checks``.
-        """
-        if not items_data:
-            return
-
-        # Build temporary items (without full Path objects) for step-key computation
-        temp_items: list[dict] = []
-        for d in items_data:
-            src = d.get("source", "")
-            temp_items.append({
-                "path": Path(src) if src else Path("."),
-                "dir_name": d.get("dir_name", ""),
-                "checks": d.get("checks", []),
-                "allowed_states": d.get("allowed_states", []),
-                "anomaly_conditions": d.get("anomaly_conditions", []),
-                "materials": d.get("materials", []),
-            })
-
-        extracted: dict[int, dict] = {}
-        step_num = 1
-        prev_key: str | None = None
-
-        for item in temp_items:
-            key = self._compute_step_key(item)
-            if prev_key is not None and key != prev_key:
-                step_num += 1
-            prev_key = key
-
-            if step_num not in extracted:
-                has_any = any(item.get(k) for k in ("checks", "allowed_states", "anomaly_conditions", "materials"))
-                if has_any:
-                    extracted[step_num] = {
-                        "checks": list(item.get("checks", [])),
-                        "allowed_states": list(item.get("allowed_states", [])),
-                        "anomaly_conditions": list(item.get("anomaly_conditions", [])),
-                        "materials": list(item.get("materials", [])),
-                    }
-
-        if extracted:
-            self._ref_step_checks = extracted
-            steps_str = ",".join(str(o) for o in sorted(extracted))
-            self._ref_status_var.set(f"参考: 已加载序列 ({len(extracted)} 步骤)")
-            self._log(
-                f"  已从序列中提取 {len(extracted)} 个步骤的检查项模板 (步骤: {steps_str})"
-            )
-
     # ── action section ──────────────────────────────────────────────────
 
     def _build_action_section(self, parent: ttk.Frame) -> None:
@@ -1924,16 +2289,6 @@ class GrabGui:
             text="📂 加载序列",
             command=self._on_load_sequence,
         ).pack(side=tk.LEFT, padx=(0, 8))
-        ttk.Button(
-            frame,
-            text="📋 加载参考manifest",
-            command=self._on_load_reference_manifest,
-        ).pack(side=tk.LEFT, padx=(0, 8))
-        # Show reference status
-        self._ref_status_var = tk.StringVar(value="")
-        ttk.Label(
-            frame, textvariable=self._ref_status_var, foreground="gray", font=("微软雅黑", 8)
-        ).pack(side=tk.LEFT, padx=(8, 0))
 
     # ── log section ─────────────────────────────────────────────────────
 
